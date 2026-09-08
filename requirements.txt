@@ -1,0 +1,34 @@
+# ==============================
+# LangChain Core
+# ==============================
+langchain
+langchain-core
+langchain-community
+
+# ==============================
+# Google Gemini
+# ==============================
+langchain-google-genai
+google-genai
+
+# ==============================
+# Tavily Web Search
+# ==============================
+tavily-python
+
+
+langchain-mistralai
+mistralai
+
+
+# ==============================
+# Web Scraping
+# ==============================
+beautifulsoup4
+requests
+lxml
+
+# ==============================
+# Environment Variables
+# ==============================
+python-dotenv
