@@ -32,3 +32,28 @@ lxml
 # Environment Variables
 # ==============================
 python-dotenv
+
+
+# HTTP Client
+aiohttp
+
+# Data Analysis
+pandas
+
+# Tokenization
+tiktoken
+
+# Rich Terminal Output
+rich
+
+# Retry Handling
+tenacity
+
+# Fast JSON Serialization/Deserialization
+orjson
+
+# Data Validation & Settings
+pydantic
+
+# HTML Parsing
+html5lib

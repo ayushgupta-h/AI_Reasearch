@@ -34,7 +34,9 @@ def scrape_url(url:str)->str:
         soup=BeautifulSoup(resp.text,"html.parser")
         for tag in soup(["script","style","nav","footer"]):
             tag.decompose()
-        return soup.get_text(sepeator=" ",strip=True)[:3000]
+        return soup.get_text(separator=" ",strip=True)[:3000]
     except Exception as e:
         return f"could not scrape URL:{str(e)}"
 
+
+print(scrape_url.invoke("https://www.nbcnews.com/world/iran-war"))
