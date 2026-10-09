@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>Quest — redirecting…</title>
+<meta http-equiv="refresh" content="0;url=new.html">
+<script>
+/* desk.html is retired — the research desk now lives at new.html.
+   Carry any query (?role=…) and hash across so old links keep working. */
+location.replace('new.html' + location.search + location.hash);
+</script>
+
+<style>
+  html,body{margin:0;height:100%;background:#050505;color:#f4efe8;
+    font:300 14px/1.6 Outfit,system-ui,sans-serif;
+    display:flex;align-items:center;justify-content:center}
+  a{color:#e9c99b;text-decoration:none;border-bottom:1px solid rgba(233,201,155,.4)}
+</style>
+</head>
+<body>
+<p>Taking you to the desk… <a href="new.html">continue</a></p>
+</body>
+</html>
