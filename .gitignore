@@ -1,11 +1,44 @@
-# Python-generated files
+# ── Python ────────────────────────────────────
 __pycache__/
 *.py[oc]
+*.pyo
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
 
-# Virtual environments
-.venv
+# ── Virtual environment ───────────────────────
+.venv/
+
+# ── Secrets / API keys ────────────────────────
 .env
+*.env
+
+# ── Generated reports (keep folder, skip files)
+backend/reports/*.md
+backend/reports/*.docx
+backend/reports/*.pdf
+reports/*.md
+reports/*.docx
+reports/*.pdf
+
+# ── Databases ─────────────────────────────────
+backend/sessions.db
+*.db
+*.sqlite
+
+# ── ChromaDB vector store ─────────────────────
+backend/chroma_db/
+
+# ── IDE / OS junk ─────────────────────────────
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ── Misc buffers ──────────────────────────────
+.freebuff/
+.kilo/
