@@ -1,0 +1,100 @@
+# ==============================
+# LangChain & LangGraph Core
+# ==============================
+langchain
+langchain-core
+langchain-community
+langgraph
+
+# ==============================
+# Google Gemini
+# ==============================
+langchain-google-genai
+google-genai
+
+# ==============================
+# Tavily Web Search
+# ==============================
+tavily-python
+
+
+langchain-mistralai
+mistralai
+
+# ==============================
+# HuggingFace (free Inference API)
+# ==============================
+langchain-huggingface
+huggingface-hub
+
+
+# ==============================
+# Web Scraping
+# ==============================
+beautifulsoup4
+requests
+lxml
+
+# ==============================
+# Multi-Source Search
+# ==============================
+duckduckgo-search
+
+# ==============================
+# Environment Variables
+# ==============================
+python-dotenv
+
+
+# HTTP Client
+aiohttp
+
+# Data Analysis
+pandas
+
+# Tokenization
+tiktoken
+
+# Rich Terminal Output
+rich
+
+# Retry Handling
+tenacity
+
+# Fast JSON Serialization/Deserialization
+orjson
+
+# Data Validation & Settings
+pydantic
+
+# HTML Parsing
+html5lib
+
+# ==============================
+# PDF & DOCX Report Export
+# ==============================
+python-docx          # DOCX / Word export
+markdown             # Markdown → HTML (for PDF pipeline)
+weasyprint           # HTML → PDF (primary PDF engine)
+reportlab            # Plain-text PDF fallback (no system deps)
+
+# ==============================
+# FastAPI REST Server
+# ==============================
+fastapi              # REST framework
+uvicorn[standard]    # ASGI server (includes websockets + httptools)
+sse-starlette        # Server-Sent Events helper (optional, used by StreamingResponse)
+
+# ==============================
+# Vector Knowledge Base (RAG)
+# ==============================
+chromadb             # Persistent vector store
+langchain-chroma     # LangChain ↔ ChromaDB integration
+sentence-transformers # Local embedding model (all-MiniLM-L6-v2)
+
+# ==============================
+# Testing
+# ==============================
+pytest               # Test runner
+pytest-mock          # Mocker fixture (simplifies unittest.mock usage)
+pytest-asyncio       # Async test support (for IsolatedAsyncioTestCase)
