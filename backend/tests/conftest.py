@@ -33,7 +33,10 @@ def _stub_if_missing(name: str, **attrs) -> types.ModuleType:
     return sys.modules[name]
 
 
-_stub_if_missing("dotenv", load_dotenv=lambda *a, **kw: None)
+try:
+    import dotenv
+except ImportError:
+    _stub_if_missing("dotenv", load_dotenv=lambda *a, **kw: None)
 _stub_if_missing("langchain_google_genai", ChatGoogleGenerativeAI=MagicMock())
 
 

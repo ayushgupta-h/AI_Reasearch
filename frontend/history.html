@@ -7,6 +7,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..500;1,9..144,300..500&family=Outfit:wght@300..500&display=swap" rel="stylesheet">
+<script src="env.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
 <script>
 (function(){var r=matchMedia('(prefers-reduced-motion: reduce)').matches;var f=new URLSearchParams(location.search).get('motion')==='full';if(r&&!f)document.documentElement.classList.add('rm');})();
 </script>
@@ -37,18 +40,6 @@ button{cursor:pointer}
 :focus-visible{outline:1px solid var(--amber);outline-offset:3px}
 .mlabel{font:500 9.5px/1 var(--sans);letter-spacing:.3em;text-transform:uppercase;color:var(--mut2)}
 
-/* grain */
-.grain{
-  position:fixed;inset:-80px;z-index:600;pointer-events:none;opacity:.05;
-  transform:translateZ(0);background-size:300px 300px;
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  animation:grainJit .6s steps(1) infinite;
-}
-@keyframes grainJit{
-  0%{transform:translate(0,0)}20%{transform:translate(-6px,4px)}
-  40%{transform:translate(4px,-8px)}60%{transform:translate(-8px,-2px)}
-  80%{transform:translate(6px,6px)}100%{transform:translate(0,0)}
-}
 
 /* ============ shell ============ */
 .app{height:100vh;display:grid;grid-template-rows:64px auto 1fr}
@@ -74,12 +65,6 @@ button{cursor:pointer}
 .topnav a:hover{color:var(--ink)}
 .topnav a.on{color:var(--ink)}
 .topnav a.on::after{transform:scaleX(1)}
-.avatar{
-  width:30px;height:30px;border-radius:50%;flex:0 0 auto;
-  display:flex;align-items:center;justify-content:center;
-  border:1px solid rgba(233,201,155,.4);
-  font:500 10px/1 var(--sans);letter-spacing:.08em;color:var(--amber);
-}
 
 /* ============ header ============ */
 .head{padding:38px 28px 22px;border-bottom:1px solid var(--line)}
@@ -132,8 +117,6 @@ button{cursor:pointer}
 .scroll{
   height:100%;overflow-y:auto;position:relative;
   padding:26px 28px 60px;
-  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 22px);
-  mask-image:linear-gradient(to bottom,transparent 0,#000 22px);
 }
 .tablewrap{border:1px solid var(--line);max-width:1240px}
 table{width:100%;border-collapse:collapse}
@@ -227,6 +210,30 @@ tr.row.open .chev{transform:rotate(180deg);color:var(--amber)}
 }
 .tlfoot{margin-top:6px}
 
+/* export row inside timeline */
+.tl-exports{display:flex;align-items:center;gap:10px;margin-top:18px;flex-wrap:wrap}
+.tl-exports .mlabel{margin-right:2px}
+.exp-btn{
+  display:inline-flex;align-items:center;gap:7px;
+  border:1px solid rgba(255,255,255,.15);padding:8px 13px;
+  font:500 8.5px/1 var(--sans);letter-spacing:.2em;text-transform:uppercase;color:var(--mut);
+  transition:border-color .3s var(--ease),color .3s var(--ease),background-color .3s var(--ease);
+}
+.exp-btn:hover{border-color:rgba(233,201,155,.5);color:var(--ink);background:rgba(233,201,155,.05)}
+.exp-btn:active{transform:scale(.97)}
+.exp-btn svg{width:11px;height:11px;flex:0 0 auto}
+
+/* Export All in header */
+.export-all{
+  display:inline-flex;align-items:center;gap:8px;
+  border:1px solid rgba(255,255,255,.18);padding:8px 16px;
+  font:500 9px/1 var(--sans);letter-spacing:.22em;text-transform:uppercase;color:var(--mut);
+  transition:border-color .3s var(--ease),color .3s var(--ease),background-color .3s var(--ease);
+}
+.export-all:hover{border-color:rgba(233,201,155,.5);color:var(--ink);background:rgba(233,201,155,.05)}
+.export-all:active{transform:scale(.97)}
+.export-all svg{width:12px;height:12px;flex:0 0 auto}
+
 /* load more + empty */
 .more{margin:26px auto 0;display:block}
 .center{display:none;padding:70px 0 30px;text-align:center}
@@ -309,7 +316,6 @@ tbody tr.tlrow:last-child td{border-bottom:0}
 }
 
 /* ============ reduced motion ============ */
-html.rm .grain{animation:none}
 html.rm .htitle .w i{transition:none;transform:none;filter:none;opacity:1}
 html.rm .tlwrap{transition:none}
 html.rm tbody tr.row.rise{animation:none;opacity:1;transform:none}
@@ -338,14 +344,13 @@ html.rm .veil{transition:none}
 <div class="veil" id="veil" aria-hidden="true"></div>
 
 
-<div class="grain" aria-hidden="true"></div>
 <div class="backdrop" id="backdrop" aria-hidden="true"></div>
 
 <div class="app" id="app">
 
   <!-- ================= TOP BAR ================= -->
   <header class="topbar">
-    <a class="brand" href="index.html" aria-label="Quest home">
+    <a class="brand" href="dashboard.html" aria-label="Quest home">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M12 2.2 20 5v6.1c0 4.9-3.3 9-8 10.7-4.7-1.7-8-5.8-8-10.7V5l8-2.8Z" stroke="#e9c99b" stroke-width="1.3"/>
         <path d="m8.4 12 2.5 2.5 4.9-4.9" stroke="#e9c99b" stroke-width="1.3"/>
@@ -353,12 +358,10 @@ html.rm .veil{transition:none}
       <b>Quest</b>
     </a>
     <nav class="topnav" aria-label="Primary">
-      <a href="new.html">New research</a>
-      <a href="report.html">Report</a>
+      <a href="dashboard.html">Home</a>
+      <a href="new.html">New Research</a>
       <a href="history.html" class="on" aria-current="page">History</a>
-      <a href="#" id="dashLink">Dashboard</a>
     </nav>
-    <span class="avatar" aria-label="Account — AS">AS</span>
   </header>
 
   <!-- ================= HEADER ================= -->
@@ -392,6 +395,10 @@ html.rm .veil{transition:none}
       <button class="sortbtn" id="sortBtn" type="button" aria-label="Sort by date, newest first">
         <svg viewBox="0 0 11 11" fill="none" aria-hidden="true"><path d="M5.5 1.2v8.6M2 6.3l3.5 3.5L9 6.3" stroke="currentColor" stroke-width="1.2"/></svg>
         <span id="sortLbl">Newest</span>
+      </button>
+      <button class="export-all" id="exportAllBtn" type="button" aria-label="Export all visible runs as CSV">
+        <svg viewBox="0 0 13 13" fill="none" aria-hidden="true"><path d="M6.5 1.8v6.4M3.8 5.6l2.7 2.7 2.7-2.7M2 11h9" stroke="currentColor" stroke-width="1.1"/></svg>
+        Export All
       </button>
     </div>
   </section>
@@ -434,9 +441,13 @@ html.rm .veil{transition:none}
     </button>
   </div>
   <div class="sheet-body" id="shBody"></div>
-  <div class="sheet-actions">
+  <div class="sheet-actions" style="flex-wrap:wrap">
     <a class="gbtn2 amberfill" id="shOpen" href="report.html">Open report</a>
     <a class="gbtn2" id="shRerun" href="new.html">Rerun</a>
+    <button class="exp-btn" id="shExpPdf" type="button">PDF</button>
+    <button class="exp-btn" id="shExpDocx" type="button">DOCX</button>
+    <button class="exp-btn" id="shExpMd" type="button">MD</button>
+    <button class="exp-btn" id="shExpTxt" type="button">TXT</button>
   </div>
 </div>
 
@@ -574,14 +585,25 @@ function tlNodes(run) {
   return '<div class="tl">' + nodes + '</div>';
 }
 
+const DL_ICON = '<svg viewBox="0 0 13 13" fill="none" aria-hidden="true"><path d="M6.5 1.8v6.4M3.8 5.6l2.7 2.7 2.7-2.7M2 11h9" stroke="currentColor" stroke-width="1.1"/></svg>';
+
 function tlHTML(run) {
+  const fileAttr = run.file ? ' data-file="' + run.file.replace(/"/g, '&quot;') + '"' : '';
   return '<div class="tl-inner">' +
     '<div class="tlhead"><span class="rid">' + run.id + '</span>' +
     '<span class="dep">' + run.depth + ' depth</span>' +
     '<span class="tot">' + run.tot + ' total</span><span class="sp"></span>' +
     '<a class="gbtn2 amberfill" href="' + (run.file ? 'report.html?run=' + encodeURIComponent(run.file) + '&topic=' + encodeURIComponent(run.topic) : 'report.html?topic=' + encodeURIComponent(run.topic)) + '">Open report</a>' +
     '<a class="gbtn2" href="new.html?q=' + encodeURIComponent(run.topic) + '&run=1">Rerun</a></div>' +
-    tlNodes(run) + '</div>';
+    tlNodes(run) +
+    '<div class="tl-exports">' +
+    '<span class="mlabel">Export</span>' +
+    '<button class="exp-btn" data-ext=".pdf"' + fileAttr + ' type="button">' + DL_ICON + 'PDF</button>' +
+    '<button class="exp-btn" data-ext=".docx"' + fileAttr + ' type="button">' + DL_ICON + 'DOCX</button>' +
+    '<button class="exp-btn" data-ext=".md"' + fileAttr + ' type="button">' + DL_ICON + 'MD</button>' +
+    '<button class="exp-btn" data-ext=".txt"' + fileAttr + ' type="button">' + DL_ICON + 'TXT</button>' +
+    '</div>' +
+    '</div>';
 }
 
 function buildRow(run, i, stagger) {
@@ -781,8 +803,6 @@ $('#clearBtn').addEventListener('click', () => {
   applyFilters();
   toast('Filters cleared.');
 });
-$('#dashLink').addEventListener('click', e => { e.preventDefault(); window.__nav ? __nav('dashboard.html') : location.href = 'dashboard.html'; });
-
 /* ================= render + load more ================= */
 function renderBatch(from, to) {
   const frag = document.createDocumentFragment();
@@ -831,22 +851,110 @@ function sessionToRun(s, i) {
     file: (s.saved_report_path || '').split(/[\\/]/).pop()
   };
 }
-fetch(API + '/sessions').then(r => r.ok ? r.json() : Promise.reject()).then(data => {
-  const ss = (data.sessions || []).filter(s => s.status !== 'cancelled');
-  if (!ss.length) return;
-  RUNS.length = 0;
-  ss.forEach((s, i) => RUNS.push(sessionToRun(s, i)));
-  tbody.innerHTML = '';
-  byId.clear();
-  openId = null;
-  shown = Math.min(PAGE, RUNS.length);
-  renderBatch(0, shown);
-  $('#moreBtn').hidden = shown >= RUNS.length;
-  countUp($('#cRuns'), RUNS.length, n => n.toLocaleString('en-US'));
-  countUp($('#cCites'), ss.reduce((a, s) => a + (s.citations_verified || 0), 0), n => n.toLocaleString('en-US'));
-  countUp($('#cAgents'), 8, n => String(n));
-  toast('Loaded ' + RUNS.length + ' real run' + (RUNS.length === 1 ? '' : 's') + ' from the backend.');
-}).catch(() => { /* backend offline — demo rows stay */ });
+function loadHistorySessions() {
+  const headers = window.QuestAuth ? QuestAuth.getAuthHeaders() : {};
+  fetch(API + '/sessions', { headers }).then(r => r.ok ? r.json() : Promise.reject()).then(data => {
+    const ss = (data.sessions || []).filter(s => s.status !== 'cancelled');
+    if (!ss.length) {
+      if (window.QuestAuth && QuestAuth.isAuthenticated()) {
+        RUNS.length = 0;
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:36px;color:var(--mut2)">No research runs found for your account yet.</td></tr>';
+        countUp($('#cRuns'), 0);
+        countUp($('#cCites'), 0);
+      }
+      return;
+    }
+    RUNS.length = 0;
+    ss.forEach((s, i) => RUNS.push(sessionToRun(s, i)));
+    tbody.innerHTML = '';
+    byId.clear();
+    openId = null;
+    shown = Math.min(PAGE, RUNS.length);
+    renderBatch(0, shown);
+    $('#moreBtn').hidden = shown >= RUNS.length;
+    countUp($('#cRuns'), RUNS.length, n => n.toLocaleString('en-US'));
+    countUp($('#cCites'), ss.reduce((a, s) => a + (s.citations_verified || 0), 0), n => n.toLocaleString('en-US'));
+    countUp($('#cAgents'), 8, n => String(n));
+    toast('Loaded ' + RUNS.length + ' real run' + (RUNS.length === 1 ? '' : 's') + ' from the backend.');
+  }).catch(() => { /* backend offline — demo rows stay */ });
+}
+
+loadHistorySessions();
+
+if (window.QuestAuth) {
+  QuestAuth.onReady(() => loadHistorySessions());
+}
+window.addEventListener('quest-auth-changed', () => loadHistorySessions());
+
+/* ================= export single run ================= */
+function exportRun(file, ext) {
+  if (!file) { toast('Export requires a real research run — demo data has no report files.'); return; }
+  const base = file.replace(/\.md$/i, '');
+  const token = (window.QuestAuth && QuestAuth.getAccessToken()) ? QuestAuth.getAccessToken() : '';
+  const tokenQuery = token ? ('?token=' + encodeURIComponent(token)) : '';
+  const url = API + '/reports/' + encodeURIComponent(base + ext) + tokenQuery;
+  const headers = window.QuestAuth ? QuestAuth.getAuthHeaders() : {};
+  fetch(url, { method: 'HEAD', headers }).then(r => {
+    if (r.ok) { window.open(url, '_blank'); toast('Downloading ' + ext.replace('.', '').toUpperCase() + '…'); }
+    else if (r.status === 401 || r.status === 403) {
+      toast('Access denied. Please sign in to download your report.');
+      if (window.QuestAuth) QuestAuth.showLoginModal('Sign in with Google to download your research reports.');
+    } else {
+      toast('No ' + ext.replace('.', '').toUpperCase() + ' file found for this run.');
+    }
+  }).catch(() => toast('Backend unreachable — cannot export.'));
+}
+
+/* desktop: event delegation on exp-btn clicks inside the table */
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.exp-btn[data-ext]');
+  if (!btn) return;
+  exportRun(btn.dataset.file || '', btn.dataset.ext);
+});
+
+/* mobile sheet export buttons */
+let sheetFile = '';
+const origOpenSheet = openSheet;
+openSheet = function(rec) {
+  sheetFile = rec.run.file || '';
+  origOpenSheet(rec);
+};
+['shExpPdf', 'shExpDocx', 'shExpMd', 'shExpTxt'].forEach(id => {
+  const ext = { shExpPdf: '.pdf', shExpDocx: '.docx', shExpMd: '.md', shExpTxt: '.txt' }[id];
+  $('#' + id).addEventListener('click', () => exportRun(sheetFile, ext));
+});
+
+/* ================= Export All CSV ================= */
+$('#exportAllBtn').addEventListener('click', () => {
+  const rows = [];
+  byId.forEach(rec => {
+    if (rec.tr.hidden) return;
+    const r = rec.run;
+    rows.push({
+      topic: r.topic,
+      date: r.dateTxt,
+      status: r.status,
+      depth: r.depth,
+      sources: r.sources,
+      score: r.score != null ? r.score : ''
+    });
+  });
+  if (!rows.length) { toast('No visible runs to export.'); return; }
+  const esc = v => '"' + String(v).replace(/"/g, '""') + '"';
+  const header = 'Topic,Date,Status,Depth,Sources,Score';
+  const csv = header + '\n' + rows.map(r =>
+    [esc(r.topic), esc(r.date), esc(r.status), esc(r.depth), r.sources, r.score].join(',')
+  ).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'quest_history_export.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+  toast('Exported ' + rows.length + ' run' + (rows.length === 1 ? '' : 's') + ' to CSV.');
+});
 
 })();
 </script>
@@ -864,7 +972,7 @@ fetch(API + '/sessions').then(r => r.ok ? r.json() : Promise.reject()).then(data
     if (!url || url.charAt(0) === '#') return;
     if (REDUCED) { location.href = url; return; }
     veil.classList.add('on');
-    setTimeout(function(){ location.href = url; }, 330);
+    setTimeout(function(){ location.href = url; }, 100);
   };
 
   /* intercept in-page <a> clicks to same-origin .html targets */
@@ -888,8 +996,8 @@ fetch(API + '/sessions').then(r => r.ok ? r.json() : Promise.reject()).then(data
     veil.classList.remove('on');
     if (window.__scrollOnLoad) window.__scrollOnLoad();
   };
-  if (document.readyState === 'complete') setTimeout(unveil, 260);
-  else window.addEventListener('load', function(){ setTimeout(unveil, 260); });
+  if (document.readyState === 'complete') setTimeout(unveil, 100);
+  else window.addEventListener('load', function(){ setTimeout(unveil, 100); });
 })();
 </script>
 

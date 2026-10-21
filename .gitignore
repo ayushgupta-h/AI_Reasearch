@@ -15,11 +15,20 @@ wheels/
 # ── Secrets / API keys ────────────────────────
 .env
 *.env
+*.key
+backend/chroma.key
+
+# ── Logs ──────────────────────────────────────
+*.log
+backend.log
+frontend.log
 
 # ── Generated reports (keep folder, skip files)
 backend/reports/*.md
 backend/reports/*.docx
 backend/reports/*.pdf
+backend/reports/exports/
+backend/reports/reports/
 reports/*.md
 reports/*.docx
 reports/*.pdf
@@ -31,6 +40,8 @@ backend/sessions.db
 
 # ── ChromaDB vector store ─────────────────────
 backend/chroma_db/
+backend/chroma_backup_*
+backend/chroma_db_backup_*/
 
 # ── IDE / OS junk ─────────────────────────────
 .vscode/
