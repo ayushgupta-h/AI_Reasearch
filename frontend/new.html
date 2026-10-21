@@ -9,6 +9,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..500;1,9..144,300..500&family=Outfit:wght@300..500&display=swap" rel="stylesheet">
+<script src="env.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
 <style>
 /* ============================================================
    QUEST · NEW RESEARCH — tokens
@@ -45,13 +48,6 @@ a{color:inherit;text-decoration:none}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 svg{display:block;flex:0 0 auto}
 
-/* grain */
-.grain{
-  position:fixed;inset:0;z-index:900;pointer-events:none;opacity:.05;
-  background-size:300px 300px;transform:translateZ(0);
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
 /* micro label */
 .mlabel{
   font:500 10px/1 var(--sans);letter-spacing:.3em;text-transform:uppercase;
@@ -61,8 +57,20 @@ svg{display:block;flex:0 0 auto}
 /* ============================================================
    SHELL
 ============================================================ */
-.shell{height:100vh;display:grid;grid-template-columns:300px 1fr}
-.main{position:relative;display:flex;flex-direction:column;overflow:hidden}
+.shell{
+  height:100vh;display:grid;grid-template-columns:300px 1fr;
+  transition:grid-template-columns .3s cubic-bezier(.22,1,.36,1);
+  overflow:hidden;width:100vw;
+}
+.shell.rail-mode,.shell:has(.side.rail){grid-template-columns:64px 1fr}
+.main{
+  position:relative;display:flex;flex-direction:column;overflow:hidden;
+  min-width:0;width:100%;height:100vh;
+}
+.main-body{
+  flex:1 1 auto;min-height:0;position:relative;display:flex;flex-direction:column;
+  overflow:hidden;width:100%;
+}
 
 /* ============================================================
    SIDEBAR
@@ -70,9 +78,9 @@ svg{display:block;flex:0 0 auto}
 .side{
   position:relative;z-index:20;display:flex;flex-direction:column;
   background:var(--lift);border-right:1px solid var(--line);
-  min-height:0;overflow:hidden;
-  transition:width .6s var(--ease);
-  width:300px;
+  min-height:0;overflow:hidden;overflow-x:hidden;
+  transition:width .3s cubic-bezier(.22,1,.36,1);
+  width:300px;min-width:0;
 }
 .side.rail{width:64px}
 .side-head{
@@ -89,9 +97,12 @@ svg{display:block;flex:0 0 auto}
   transition:background-color .15s ease,color .15s ease;
 }
 .ibtn:hover{background:rgba(255,255,255,.05);color:var(--ink)}
-.side.rail .side-head{flex-direction:column;gap:12px;padding:20px 0 14px}
-.side.rail .wordmark,.side.rail .head-btns .search-btn{display:none}
-.side.rail .head-btns{margin:0}
+
+/* Collapsed sidebar header */
+.side.rail .side-head{flex-direction:column;align-items:center;gap:12px;padding:16px 0 12px}
+.side.rail .brand{justify-content:center;margin:0}
+.side.rail .wordmark,.side.rail .head-btns .search-btn{display:none !important}
+.side.rail .head-btns{margin:0;display:flex;justify-content:center;width:100%}
 
 /* inline search */
 .side-search{padding:0 16px 10px;overflow:hidden;max-height:0;transition:max-height .45s var(--ease),padding .45s var(--ease)}
@@ -102,16 +113,17 @@ svg{display:block;flex:0 0 auto}
 }
 .side-search input::placeholder{color:var(--mut2)}
 .side-search input:focus{border-color:rgba(233,201,155,.5);outline:none}
-.side.rail .side-search{display:none}
+.side.rail .side-search{display:none !important}
 
 .side-scroll{
-  flex:1;min-height:0;overflow-y:auto;padding:2px 10px 12px;position:relative;
+  flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:2px 10px 12px;position:relative;
 }
 .side-scroll::after{
   content:"";position:sticky;bottom:0;left:0;right:0;display:block;height:34px;pointer-events:none;
   background:linear-gradient(to top,var(--lift) 30%,transparent);
   margin-bottom:-8px;
 }
+.side.rail .side-scroll{padding:4px 6px 12px}
 
 /* new research */
 .newres{
@@ -129,8 +141,12 @@ svg{display:block;flex:0 0 auto}
 .newres:hover{color:#0b0906;border-color:var(--amber)}
 .newres.active{border-color:rgba(233,201,155,.35);background:rgba(233,201,155,.04);box-shadow:inset 2px 0 0 var(--amber)}
 .newres svg{width:14px;height:14px}
-.side.rail .newres{justify-content:center;padding:11px 0}
-.side.rail .newres .nr-label{display:none}
+.side.rail .newres{
+  justify-content:center;align-items:center;padding:0;
+  width:44px;height:44px;margin:4px auto 14px;border-radius:10px;
+}
+.side.rail .newres .nr-label{display:none !important}
+.side.rail .newres svg{margin:0}
 
 /* nav rows */
 .navrow{
@@ -151,31 +167,11 @@ svg{display:block;flex:0 0 auto}
   background:rgba(233,201,155,.14);color:var(--amber);border-radius:4px;
 }
 .navrow .badge[hidden]{display:none}
-.side.rail .navrow{justify-content:center;padding:10px 0}
-.side.rail .navrow .nr-name,.side.rail .navrow .badge{display:none}
-
-/* popover */
-.popover{
-  position:absolute;z-index:60;min-width:250px;
-  background:#0e0e0c;border:1px solid var(--line);border-radius:10px;
-  padding:8px;box-shadow:0 18px 50px rgba(0,0,0,.6);
-  opacity:0;transform:translateY(6px);pointer-events:none;
-  transition:opacity .3s var(--ease),transform .3s var(--ease);
+.side.rail .navrow{
+  justify-content:center;align-items:center;padding:0;
+  width:44px;height:40px;margin:2px auto;border-radius:8px;transform:none !important;
 }
-.popover.open{opacity:1;transform:none;pointer-events:auto}
-.pop-title{padding:8px 10px 6px}
-.sched-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:7px}
-.sched-row:hover{background:rgba(255,255,255,.04)}
-.sched-name{font:300 12.5px/1.3 var(--sans);color:var(--ink)}
-.sched-when{font:400 10px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--amber);margin-top:3px}
-.pause{
-  margin-left:auto;width:26px;height:26px;border-radius:6px;flex:0 0 auto;
-  display:flex;align-items:center;justify-content:center;color:var(--mut);
-  transition:background-color .15s ease,color .15s ease;
-}
-.pause:hover{background:rgba(255,255,255,.06);color:var(--ink)}
-.pause.on{color:var(--amber)}
-.pause svg{width:12px;height:12px}
+.side.rail .navrow .nr-name,.side.rail .navrow .badge{display:none !important}
 
 /* section lists */
 .sect{margin-top:16px}
@@ -200,22 +196,16 @@ svg{display:block;flex:0 0 auto}
 .collapse-wrap{overflow:hidden;transition:height .5s var(--ease)}
 .collapse-wrap > div{padding-top:2px}
 
-/* footer */
-.side-foot{
-  flex:0 0 auto;border-top:1px solid var(--line);padding:14px 16px;
-  display:flex;align-items:center;gap:11px;cursor:pointer;
+/* Collapsed rail section adjustments */
+.side.rail .sect{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06)}
+.side.rail .sect-h,.side.rail .showmore,.side.rail .collapse-wrap,.side.rail .side-empty{display:none !important}
+.side.rail .srow{
+  justify-content:center;align-items:center;padding:0;
+  width:44px;height:38px;margin:2px auto;border-radius:8px;
+  text-align:center;transform:none !important;
 }
-.side-foot:hover{background:rgba(255,255,255,.02)}
-.avatar{
-  width:30px;height:30px;border-radius:50%;flex:0 0 auto;
-  background:radial-gradient(circle at 30% 30%,#f0d9b8,#c9a06a);
-  color:#211605;display:flex;align-items:center;justify-content:center;
-  font:500 11px/1 var(--sans);letter-spacing:.04em;
-}
-.foot-name{font:400 13px/1.2 var(--sans);color:var(--ink)}
-.side-foot .mlabel{margin-top:3px}
-.side.rail .side-foot{justify-content:center;padding:14px 0}
-.side.rail .foot-meta{display:none}
+.side.rail .srow span:not(.ric){display:none !important}
+.side.rail .srow .ric{margin:0;display:flex;align-items:center;justify-content:center}
 
 /* toast */
 .toast{
@@ -234,37 +224,22 @@ svg{display:block;flex:0 0 auto}
    MAIN · top bar + toggle
 ============================================================ */
 .topbar{
-  position:absolute;top:0;left:0;right:0;z-index:30;
-  display:flex;align-items:flex-start;justify-content:center;
-  padding:16px 20px 0;pointer-events:none;
+  position:absolute;top:0;left:0;right:0;height:64px;
+  display:flex;align-items:center;gap:12px;padding:0 24px;
+  z-index:30;pointer-events:none;
 }
-.toggle{
-  pointer-events:auto;position:relative;display:flex;align-items:center;
-  border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:4px;
-  background:rgba(255,255,255,.02);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-}
-.toggle button{
-  position:relative;z-index:1;padding:8px 22px;border-radius:999px;
-  font:500 10.5px/1 var(--sans);letter-spacing:.22em;text-transform:uppercase;
-  color:var(--mut2);transition:color .4s var(--ease);
-}
-.toggle button.on{color:var(--ink)}
-.tind{
-  position:absolute;top:4px;bottom:4px;left:0;width:0;border-radius:999px;
-  box-shadow:inset 0 -1px 0 var(--amber);
-  transition:transform .5s var(--ease),width .5s var(--ease);
-}
-.hist-btn{pointer-events:auto;position:absolute;right:20px;top:16px}
-.mob-shield{display:none;pointer-events:auto;position:absolute;left:16px;top:14px;width:36px;height:36px;border-radius:9px;border:1px solid var(--line);background:var(--lift);align-items:center;justify-content:center}
+.hist-btn{pointer-events:auto;margin-left:auto}
+.mob-shield{display:none;pointer-events:auto;width:36px;height:36px;border-radius:9px;border:1px solid var(--line);background:var(--lift);align-items:center;justify-content:center}
 .mob-shield svg{width:18px;height:18px}
 
 /* ============================================================
    MAIN · empty state
 ============================================================ */
 .center{
-  flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
-  padding:96px 24px 32px;position:relative;z-index:1;
+  flex:1 1 auto;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:80px 24px 32px;overflow-y:auto;position:relative;z-index:1;width:100%;box-sizing:border-box;
 }
+.main.docked-mode .center{display:none}
 .greet{
   font:400 clamp(30px,4vw,46px)/1.15 var(--serif);letter-spacing:-.02em;
   text-align:center;max-width:820px;
@@ -274,65 +249,82 @@ svg{display:block;flex:0 0 auto}
 .greet.go .gw i{transform:none;filter:blur(0)}
 
 /* ============================================================
+   COMPOSER SLOT & BOTTOM DOCK
+============================================================ */
+.composer-slot{
+  width:100%;display:flex;justify-content:center;
+}
+.bottom-dock{
+  flex:0 0 auto;width:100%;display:none;justify-content:center;
+  padding:12px 24px 20px;
+  background:linear-gradient(to top, rgba(5,5,5,.98) 75%, rgba(5,5,5,0));
+  z-index:30;border-top:1px solid rgba(255,255,255,.05);
+  box-sizing:border-box;
+}
+.main.docked-mode .bottom-dock{display:flex}
+.bottom-dock .composer-wrap{margin-top:0;opacity:1;transform:none}
+.bottom-dock .hintrow{margin-top:6px}
+
+/* ============================================================
    COMPOSER
 ============================================================ */
 .composer-wrap{
-  width:100%;max-width:780px;margin-top:34px;
+  width:100%;max-width:780px;margin-top:34px;box-sizing:border-box;
   opacity:0;transform:translateY(16px);
   transition:opacity .8s var(--ease) 620ms,transform .8s var(--ease) 620ms;
 }
 .loaded .composer-wrap{opacity:1;transform:none}
 .composer{
   display:flex;align-items:flex-end;gap:8px;
-  border:1px solid rgba(255,255,255,.14);border-radius:999px;
-  background:rgba(255,255,255,.03);
-  padding:12px 12px 12px 14px;min-height:68px;
-  transition:border-color .3s var(--ease),box-shadow .3s var(--ease);
-  position:relative;
+  border:1px solid rgba(255,255,255,.14);border-radius:28px;
+  background:rgba(20,20,19,.75);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  padding:8px 10px 8px 12px;min-height:56px;box-sizing:border-box;
+  transition:border-color .3s var(--ease),box-shadow .3s var(--ease),border-radius .3s var(--ease);
+  position:relative;width:100%;
 }
 .composer:focus-within{border-color:rgba(233,201,155,.55);box-shadow:0 0 0 1px rgba(233,201,155,.18),0 8px 40px rgba(233,201,155,.06)}
-.composer.docked{border-radius:22px}
-.composer.docked.dock-pill{border-radius:999px}
+.composer.docked{border-radius:24px}
+.composer.docked.dock-pill{border-radius:28px}
+
 .cplus{
-  position:relative;width:38px;height:38px;border-radius:50%;flex:0 0 auto;margin-bottom:3px;
-  border:1px solid rgba(255,255,255,.16);color:var(--mut);
-  display:flex;align-items:center;justify-content:center;
+  position:relative;width:40px;height:40px;border-radius:50%;flex:0 0 40px;margin:0;
+  border:1px solid rgba(255,255,255,.16);color:var(--mut);background:transparent;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
   transition:border-color .15s ease,color .15s ease,background-color .15s ease;
 }
 .cplus:hover{border-color:rgba(233,201,155,.5);color:var(--amber)}
 .cplus .cnt{
-  position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;
+  position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;
   background:var(--amber);color:#0b0906;font:500 9.5px/16px var(--sans);text-align:center;
   display:none;
 }
 .cplus .cnt.show{display:block}
 .cplus svg{width:15px;height:15px}
+
 .cinput{
-  flex:1;min-width:0;border:0;background:transparent;resize:none;
-  font:300 15.5px/1.45 var(--sans);color:var(--ink);
-  max-height:calc(5 * 1.45em + 8px);padding:8px 2px 3px;
+  flex:1 1 auto;min-width:0;border:0;background:transparent;resize:none;
+  font:300 15px/1.45 var(--sans);color:var(--ink);
+  min-height:40px;max-height:140px;padding:9px 4px 9px 6px;box-sizing:border-box;
+  margin:0;outline:none;overflow-y:auto;
 }
 .cinput::placeholder{color:var(--mut2)}
+
 .cdepth{
-  position:relative;flex:0 0 auto;margin-bottom:6px;
+  position:relative;flex:0 0 auto;margin:0;height:40px;padding:0 12px;
+  border-radius:20px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);
   font:400 12.5px/1 var(--sans);color:var(--mut);letter-spacing:.02em;
-  display:flex;align-items:center;gap:5px;padding:6px 4px;border-radius:7px;
-  transition:color .15s ease,background-color .15s ease;
+  display:inline-flex;align-items:center;gap:6px;cursor:pointer;box-sizing:border-box;
+  transition:color .15s ease,background-color .15s ease,border-color .15s ease;
 }
-.cdepth:hover{color:var(--ink);background:rgba(255,255,255,.04)}
+.cdepth:hover{color:var(--ink);background:rgba(255,255,255,.06);border-color:rgba(233,201,155,.3)}
 .cdepth svg{width:10px;height:10px;transition:transform .3s var(--ease)}
 .cdepth[aria-expanded="true"] svg{transform:rotate(180deg)}
-.cmic{
-  width:34px;height:34px;border-radius:50%;flex:0 0 auto;margin-bottom:4px;
-  display:flex;align-items:center;justify-content:center;color:var(--mut2);
-  transition:color .15s ease,background-color .15s ease;
-}
-.cmic:hover{color:var(--ink);background:rgba(255,255,255,.05)}
-.cmic svg{width:15px;height:15px}
+
 .csend{
-  width:44px;height:44px;border-radius:50%;flex:0 0 auto;
-  display:flex;align-items:center;justify-content:center;
-  border:1px solid rgba(255,255,255,.22);color:rgba(244,239,232,.35);
+  width:40px;height:40px;border-radius:50%;flex:0 0 40px;margin:0;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  border:1px solid rgba(255,255,255,.22);color:rgba(244,239,232,.35);background:transparent;
   transition:background-color .3s var(--ease),color .3s var(--ease),border-color .3s var(--ease),transform .15s var(--ease);
 }
 .csend:active{transform:scale(.94)}
@@ -369,35 +361,9 @@ svg{display:block;flex:0 0 auto}
 .ditem .dck{width:14px;height:14px;color:var(--amber);opacity:0;flex:0 0 auto;margin-top:2px}
 .ditem[aria-checked="true"] .dck{opacity:1}
 
-/* hint + schedule */
-.hintrow{width:100%;display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:12px}
-.hint{font:400 11px/1.5 var(--sans);letter-spacing:.06em;color:var(--mut2);text-align:center;flex:1}
-.sched-tgl{
-  display:flex;align-items:center;gap:7px;flex:0 0 auto;
-  font:400 11.5px/1 var(--sans);color:var(--mut2);
-  padding:5px 8px;border-radius:7px;transition:color .15s ease,background-color .15s ease;
-}
-.sched-tgl:hover{color:var(--ink);background:rgba(255,255,255,.04)}
-.sched-tgl svg{width:12px;height:12px}
-.sched-row2{
-  width:100%;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-  margin-top:10px;overflow:hidden;max-height:0;opacity:0;
-  transition:max-height .5s var(--ease),opacity .4s var(--ease),margin .5s var(--ease);
-}
-.sched-row2.open{max-height:60px;opacity:1}
-.freq{
-  border:1px solid rgba(255,255,255,.16);border-radius:999px;padding:6px 13px;
-  font:500 9.5px/1 var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--mut);
-  transition:all .2s var(--ease);
-}
-.freq:hover{border-color:rgba(233,201,155,.5);color:var(--ink)}
-.freq[aria-pressed="true"]{background:var(--amber);border-color:var(--amber);color:#0b0906}
-.sched-ok{
-  margin-left:auto;font:500 10px/1 var(--sans);letter-spacing:.2em;text-transform:uppercase;color:var(--amber);
-  padding:7px 12px;border:1px solid rgba(233,201,155,.4);border-radius:999px;
-  transition:background-color .2s var(--ease),color .2s var(--ease);
-}
-.sched-ok:hover{background:var(--amber);color:#0b0906}
+/* hint */
+.hintrow{width:100%;display:flex;align-items:center;justify-content:center;gap:14px;margin-top:12px}
+.hint{font:400 11px/1.5 var(--sans);letter-spacing:.06em;color:var(--mut2);text-align:center}
 
 /* ============================================================
    SUGGESTIONS
@@ -429,11 +395,12 @@ svg{display:block;flex:0 0 auto}
    RUN VIEW
 ============================================================ */
 .runview{
-  position:absolute;inset:0;z-index:2;display:none;
+  flex:1 1 auto;min-height:0;display:none;
   flex-direction:column;align-items:center;
-  padding:84px 24px 150px;overflow-y:auto;
+  padding:76px 24px 32px;overflow-y:auto;overflow-x:hidden;
+  width:100%;box-sizing:border-box;position:relative;
 }
-.runview.on{display:flex}
+.main.docked-mode .runview{display:flex}
 .run-q{
   font:400 clamp(24px,3vw,38px)/1.25 var(--serif);letter-spacing:-.015em;
   text-align:center;max-width:760px;
@@ -442,7 +409,7 @@ svg{display:block;flex:0 0 auto}
 .run-card{
   width:100%;max-width:720px;margin-top:30px;
   border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.015);
-  padding:20px 22px 16px;
+  padding:20px 22px 16px;box-sizing:border-box;
 }
 .agents{display:flex;flex-direction:column}
 .arow2{display:flex;align-items:center;gap:12px;padding:8px 2px}
@@ -457,8 +424,6 @@ svg{display:block;flex:0 0 auto}
   margin-top:14px;border-top:1px solid var(--line);padding-top:12px;
   font:400 11px/1.7 var(--mono);color:var(--mut);
   height:calc(8 * 1.7em);overflow:hidden;position:relative;
-  -webkit-mask-image:linear-gradient(to bottom,transparent,#000 14%);
-  mask-image:linear-gradient(to bottom,transparent,#000 14%);
   display:flex;flex-direction:column;justify-content:flex-end;
 }
 .alog div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -467,22 +432,22 @@ svg{display:block;flex:0 0 auto}
   border:1px dashed rgba(255,255,255,.16);border-radius:12px;
   padding:12px 16px;font:400 11px/1 var(--sans);letter-spacing:.22em;text-transform:uppercase;color:var(--mut2);
   text-align:center;transition:color .2s var(--ease),border-color .2s var(--ease),background-color .2s var(--ease);
+  box-sizing:border-box;
 }
 .queue-row:hover{color:var(--ink);border-color:rgba(233,201,155,.4);background:rgba(255,255,255,.02)}
 .queue-input-wrap{
   width:100%;max-width:720px;margin-top:10px;overflow:hidden;max-height:0;opacity:0;
-  transition:max-height .5s var(--ease),opacity .4s var(--ease);
+  transition:max-height .5s var(--ease),opacity .4s var(--ease);box-sizing:border-box;
 }
 .queue-input-wrap.open{max-height:70px;opacity:1}
 .queue-input{
   width:100%;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:12px;
-  font:300 14px/1.4 var(--sans);color:var(--ink);padding:12px 16px;
+  font:300 14px/1.4 var(--sans);color:var(--ink);padding:12px 16px;box-sizing:border-box;
 }
 .queue-input::placeholder{color:var(--mut2)}
 .queue-input:focus{border-color:rgba(233,201,155,.5);outline:none}
 .qchips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:14px;max-width:760px}
 .side-empty{font:300 11.5px/1.6 var(--sans);color:var(--mut2);padding:8px 2px 2px}
-.sched-empty{font:300 11.5px/1.6 var(--sans);color:var(--mut2);padding:6px 0 2px}
 .qchip{
   display:flex;align-items:center;gap:8px;
   border:1px solid rgba(233,201,155,.3);border-radius:999px;background:rgba(233,201,155,.05);
@@ -492,7 +457,7 @@ svg{display:block;flex:0 0 auto}
 .qchip.running .qdot{background:rgba(233,201,155,.5);border-color:var(--amber);animation:apulse 1.1s ease-in-out infinite alternate}
 .qchip.done .qdot{background:var(--amber);border-color:var(--amber)}
 .draft{
-  width:100%;max-width:720px;margin-top:18px;
+  width:100%;max-width:720px;margin-top:18px;box-sizing:border-box;
   border:1px solid rgba(233,201,155,.35);border-radius:14px;background:rgba(233,201,155,.04);
   padding:20px 22px;
   opacity:0;transform:translateY(18px);transition:opacity .6s var(--ease),transform .6s var(--ease);
@@ -515,45 +480,6 @@ svg{display:block;flex:0 0 auto}
 .dagain:hover{border-color:rgba(233,201,155,.5);background:rgba(233,201,155,.05)}
 
 /* ============================================================
-   CHAT THREAD
-============================================================ */
-.thread{
-  position:absolute;inset:0;z-index:2;display:none;flex-direction:column;align-items:center;
-  padding:84px 24px 150px;overflow-y:auto;
-}
-.thread.on{display:flex}
-.msg-u{
-  align-self:flex-end;max-width:70%;
-  border:1px solid var(--line);border-radius:14px 14px 4px 14px;
-  background:rgba(255,255,255,.03);padding:12px 16px;
-  font:300 14.5px/1.55 var(--sans);
-}
-.msg-a{
-  align-self:flex-start;max-width:78%;margin-top:18px;
-  font:400 17px/1.65 var(--serif);letter-spacing:.005em;
-}
-.msg-a .caret{display:inline-block;width:1px;height:1em;background:var(--amber);vertical-align:-2px;animation:caret 1s steps(1) infinite}
-@keyframes caret{50%{opacity:0}}
-.cite{
-  display:inline-flex;align-items:center;vertical-align:2px;
-  border:1px solid rgba(233,201,155,.4);border-radius:5px;
-  font:500 9.5px/1 var(--sans);color:var(--amber);padding:2px 5px;margin:0 3px;
-  position:relative;cursor:default;
-}
-.cite .tip{
-  position:absolute;bottom:calc(100% + 8px);left:50%;transform:translate(-50%,4px);
-  background:#0e0e0c;border:1px solid var(--line);border-radius:8px;padding:8px 11px;
-  font:300 11.5px/1.45 var(--sans);color:var(--mut);white-space:nowrap;
-  opacity:0;pointer-events:none;transition:opacity .25s var(--ease),transform .25s var(--ease);
-  z-index:80;
-}
-.cite:hover .tip{opacity:1;transform:translate(-50%,0)}
-.switch-hint{
-  align-self:flex-start;margin-top:10px;font:400 11px/1 var(--sans);letter-spacing:.08em;color:var(--mut2);
-}
-.switch-hint button{color:var(--amber);letter-spacing:inherit}
-
-/* ============================================================
    RESPONSIVE
 ============================================================ */
 .backdrop{
@@ -563,7 +489,8 @@ svg{display:block;flex:0 0 auto}
 }
 .backdrop.on{opacity:1;pointer-events:auto}
 @media (max-width:900px){
-  .shell{grid-template-columns:1fr}
+  .shell{grid-template-columns:1fr !important}
+  .shell.rail-mode{grid-template-columns:1fr !important}
   .side{
     position:fixed;top:0;left:0;bottom:0;width:300px;
     transform:translateX(-100%);transition:transform .5s var(--ease);
@@ -573,23 +500,25 @@ svg{display:block;flex:0 0 auto}
   .side.rail{width:300px;transform:translateX(-100%)}
   .side.rail.open{transform:none}
   .side.rail .side-head{flex-direction:row;gap:10px;padding:20px 16px 14px}
-  .side.rail .wordmark{display:inline}
-  .side.rail .head-btns{display:flex;margin-left:auto}
-  .side.rail .navrow{justify-content:flex-start;padding:10px 12px}
-  .side.rail .navrow .nr-name{display:inline}
-  .side.rail .newres{justify-content:flex-start;padding:11px 14px}
-  .side.rail .newres .nr-label{display:inline}
-  .side.rail .side-foot{justify-content:flex-start;padding:14px 16px}
-  .side.rail .foot-meta{display:block}
+  .side.rail .wordmark{display:inline !important}
+  .side.rail .head-btns{display:flex;margin-left:auto;width:auto}
+  .side.rail .head-btns .search-btn{display:flex !important}
+  .side.rail .navrow{justify-content:flex-start;padding:10px 12px;width:100%}
+  .side.rail .navrow .nr-name{display:inline !important}
+  .side.rail .newres{justify-content:flex-start;padding:11px 14px;width:100%}
+  .side.rail .newres .nr-label{display:inline !important}
+  .side.rail .sect-h{display:flex !important}
+  .side.rail .showmore{display:inline !important}
+  .side.rail .srow{justify-content:flex-start;padding:8px 12px;width:100%}
+  .side.rail .srow span:not(.ric){display:inline !important}
   .mob-shield{display:flex}
   .center{padding-top:120px}
-  .runview,.thread{padding-top:110px}
+  .runview{padding-top:110px}
   .greet{font-size:clamp(26px,6.4vw,34px)}
-  .composer{padding:10px 10px 10px 12px;gap:6px}
+  .composer{padding:8px 8px 8px 10px;gap:6px}
   .cdepth{display:none}
   .hintrow{flex-direction:column-reverse;gap:8px}
-  .msg-u{max-width:88%}
-  .msg-a{max-width:94%}
+  .bottom-dock{padding:8px 12px 14px}
 }
 
 /* ============================================================
@@ -608,16 +537,9 @@ html.rm .alog div{white-space:normal}
   position:fixed;inset:0;z-index:200;pointer-events:none;
   background:#050505;
   opacity:0;visibility:hidden;
-  transition:opacity .38s cubic-bezier(.22,1,.36,1),visibility 0s linear .38s;
+  transition:opacity .1s ease,visibility 0s linear .1s;
 }
-.veil::after{ /* thin amber leading edge, resn-style */
-  content:"";position:absolute;left:0;right:0;top:0;height:2px;
-  background:linear-gradient(90deg,transparent,rgba(233,201,155,.9),transparent);
-  transform:translateY(-2px);
-  transition:transform .38s cubic-bezier(.22,1,.36,1);
-}
-.veil.on{opacity:1;visibility:visible;transition:opacity .32s cubic-bezier(.22,1,.36,1),visibility 0s}
-.veil.on::after{transform:translateY(0)}
+.veil.on{opacity:1;visibility:visible;transition:opacity .1s ease,visibility 0s}
 html.rm .veil{transition:none}
 </style>
 </head>
@@ -626,14 +548,12 @@ html.rm .veil{transition:none}
 <div class="veil" id="veil" aria-hidden="true"></div>
 
 
-<div class="grain" aria-hidden="true"></div>
-
 <div class="shell">
 
   <!-- ================= SIDEBAR ================= -->
   <aside class="side" id="side" aria-label="Sessions">
     <div class="side-head">
-      <a class="brand" href="index.html" aria-label="Quest home">
+      <a class="brand" href="new.html" aria-label="Quest home">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M12 2.2 20 5v6.1c0 4.9-3.3 9-8 10.7-4.7-1.7-8-5.8-8-10.7V5l8-2.8Z" stroke="#e9c99b" stroke-width="1.3"/>
           <path d="m8.4 12 2.5 2.5 4.9-4.9" stroke="#e9c99b" stroke-width="1.3"/>
@@ -660,22 +580,13 @@ html.rm .veil{transition:none}
         <span class="nr-label">New research</span>
       </button>
 
-      <button class="navrow" data-go="dashboard.html" type="button">
-        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.2"/><path d="M8 4.8V8l2.3 1.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-        <span class="nr-name">Scheduled</span>
-        <span class="badge" id="schedCount" hidden>0</span>
-      </button>
       <button class="navrow" data-go="history.html" type="button">
         <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 2.8c1.8-.9 3.7-.9 5.5.4 1.8-1.3 3.7-1.3 5.5-.4v10c-1.8-.9-3.7-.9-5.5.4-1.8-1.3-3.7-1.3-5.5-.4v-10Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M8 3.2v10" stroke="currentColor" stroke-width="1.2"/></svg>
-        <span class="nr-name">Library</span>
+        <span class="nr-name">History</span>
       </button>
-      <button class="navrow" data-go="index.html#research" type="button">
-        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5 9.5 6 14 7.5 9.5 9 8 13.5 6.5 9 2 7.5 6.5 6 8 1.5Z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><path d="M12.8 11.2l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2Z" fill="currentColor" opacity=".7"/></svg>
-        <span class="nr-name">Agents</span>
-      </button>
-      <button class="navrow" data-stub type="button">
-        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.2"/><path d="m10.8 5.2-1.5 4.1-4.1 1.5 1.5-4.1 4.1-1.5Z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
-        <span class="nr-name">Explore</span>
+      <button class="navrow" data-go="dashboard.html" type="button">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="1.5" y="1.5" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.1"/><rect x="9.5" y="1.5" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.1"/><rect x="1.5" y="9.5" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.1"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.1"/></svg>
+        <span class="nr-name">Home</span>
       </button>
 
       <div class="sect">
@@ -700,129 +611,103 @@ html.rm .veil{transition:none}
       </div>
     </div>
 
-    <div class="side-foot" id="footUser" role="button" tabindex="0" aria-label="Account — guest">
-      <span class="avatar">G</span>
-      <span class="foot-meta">
-        <span class="foot-name">Guest</span>
-        <div class="mlabel" style="margin-top:4px">Not signed in</div>
-      </span>
-    </div>
-
-    <!-- scheduled popover -->
-    <div class="popover" id="schedPop" role="dialog" aria-label="Scheduled runs" hidden>
-      <div class="pop-title mlabel">Scheduled runs</div>
-      <p class="sched-empty">Nothing scheduled yet.</p>
-    </div>
   </aside>
 
   <!-- ================= MAIN ================= -->
-  <main class="main">
+  <main class="main" id="mainArea">
     <div class="topbar">
       <button class="mob-shield" id="mobShield" type="button" aria-label="Open menu">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2.2 20 5v6.1c0 4.9-3.3 9-8 10.7-4.7-1.7-8-5.8-8-10.7V5l8-2.8Z" stroke="#e9c99b" stroke-width="1.3"/><path d="m8.4 12 2.5 2.5 4.9-4.9" stroke="#e9c99b" stroke-width="1.3"/></svg>
       </button>
-      <div class="toggle" role="tablist" aria-label="Mode">
-        <span class="tind" id="tind" aria-hidden="true"></span>
-        <button id="modeChat" type="button" role="tab" aria-selected="false">Chat</button>
-        <button id="modeRes" type="button" role="tab" aria-selected="true" class="on">Research</button>
-      </div>
       <button class="ibtn hist-btn" id="histBtn" type="button" aria-label="History">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.7 8a5.3 5.3 0 1 1 1.6 3.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M2.5 8.5V5.6h2.9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 5.4V8l1.9 1.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
       </button>
     </div>
 
-    <!-- EMPTY STATE -->
-    <div class="center" id="centerCol">
-      <h1 class="greet" id="greet" aria-label="What do you want to understand?"></h1>
+    <!-- MAIN BODY -->
+    <div class="main-body" id="mainBody">
+      <!-- EMPTY STATE -->
+      <div class="center" id="centerCol">
+        <h1 class="greet" id="greet" aria-label="What do you want to understand?"></h1>
 
-      <div class="composer-wrap" id="composerWrap">
-        <div class="composer" id="composer">
-          <button class="cplus" id="cplus" type="button" aria-label="Choose sources" aria-expanded="false" aria-haspopup="dialog">
-            <svg viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M7.5 2.2v10.6M2.2 7.5h10.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-            <span class="cnt" id="srcCnt">3</span>
-          </button>
-          <textarea class="cinput" id="cinput" rows="1" placeholder="Describe your question — the agents will take it from there." aria-label="Research question"></textarea>
-          <button class="cdepth" id="cdepth" type="button" aria-expanded="false" aria-haspopup="listbox">
-            <span id="depthLabel">Standard</span>
-            <svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="m2 3.5 3 3 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <button class="cmic" id="cmic" type="button" aria-label="Voice input">
-            <svg viewBox="0 0 15 15" fill="none" aria-hidden="true"><rect x="5.4" y="1.5" width="4.2" height="7.5" rx="2.1" stroke="currentColor" stroke-width="1.2"/><path d="M3.2 7.2a4.3 4.3 0 0 0 8.6 0M7.5 11.5v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-          </button>
-          <button class="csend" id="csend" type="button" aria-label="Run research">
-            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
+        <div class="composer-slot" id="centerComposerSlot">
+          <div class="composer-wrap" id="composerWrap">
+            <div class="composer" id="composer">
+              <button class="cplus" id="cplus" type="button" aria-label="Choose sources" aria-expanded="false" aria-haspopup="dialog" title="Sources">
+                <svg viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M7.5 2.2v10.6M2.2 7.5h10.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                <span class="cnt" id="srcCnt">3</span>
+              </button>
+              <textarea class="cinput" id="cinput" rows="1" placeholder="Describe your question — the agents will take it from there." aria-label="Research question"></textarea>
+              <button class="cdepth" id="cdepth" type="button" aria-expanded="false" aria-haspopup="listbox" title="Research Depth">
+                <span id="depthLabel">Standard</span>
+                <svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="m2 3.5 3 3 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="csend" id="csend" type="button" aria-label="Run research" title="Run research">
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
 
-          <!-- sources popover -->
-          <div class="cpop" id="srcPop" role="dialog" aria-label="Sources">
-            <div class="cpop-t mlabel">Sources</div>
-            <div class="src-chips" id="srcChips">
-              <button class="schip" type="button" aria-pressed="true" data-src>Web</button>
-              <button class="schip" type="button" aria-pressed="true" data-src>News</button>
-              <button class="schip" type="button" aria-pressed="true" data-src>Academic</button>
-              <button class="schip" type="button" aria-pressed="false" data-src>Reports</button>
+              <!-- sources popover -->
+              <div class="cpop" id="srcPop" role="dialog" aria-label="Sources">
+                <div class="cpop-t mlabel">Sources</div>
+                <div class="src-chips" id="srcChips">
+                  <button class="schip" type="button" aria-pressed="true" data-src>Web</button>
+                  <button class="schip" type="button" aria-pressed="true" data-src>News</button>
+                  <button class="schip" type="button" aria-pressed="true" data-src>Academic</button>
+                  <button class="schip" type="button" aria-pressed="false" data-src>Reports</button>
+                </div>
+              </div>
+              <!-- depth menu -->
+              <div class="cpop right dmenu" id="depthPop" role="listbox" aria-label="Depth">
+                <button class="ditem" type="button" role="option" data-depth="Quick" aria-checked="false">
+                  <svg class="dck" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="m2.5 7.5 3 3 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span><span class="dn">Quick</span><span class="dd" style="display:block">Skim the top sources — one page, fast.</span></span>
+                </button>
+                <button class="ditem" type="button" role="option" data-depth="Standard" aria-checked="true">
+                  <svg class="dck" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="m2.5 7.5 3 3 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span><span class="dn">Standard</span><span class="dd" style="display:block">Full sweep with verification passes.</span></span>
+                </button>
+                <button class="ditem" type="button" role="option" data-depth="Deep" aria-checked="false">
+                  <svg class="dck" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="m2.5 7.5 3 3 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span><span class="dn">Deep</span><span class="dd" style="display:block">Exhaustive crawl, cross-examined claims.</span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="hintrow">
+              <p class="hint">⌘↵ to run · sources stay attached to every claim</p>
             </div>
           </div>
-          <!-- depth menu -->
-          <div class="cpop right dmenu" id="depthPop" role="listbox" aria-label="Depth">
-            <button class="ditem" type="button" role="option" data-depth="Quick" aria-checked="false">
-              <svg class="dck" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="m2.5 7.5 3 3 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              <span><span class="dn">Quick</span><span class="dd" style="display:block">Skim the top sources — one page, fast.</span></span>
-            </button>
-            <button class="ditem" type="button" role="option" data-depth="Standard" aria-checked="true">
-              <svg class="dck" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="m2.5 7.5 3 3 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              <span><span class="dn">Standard</span><span class="dd" style="display:block">Full sweep with verification passes.</span></span>
-            </button>
-            <button class="ditem" type="button" role="option" data-depth="Deep" aria-checked="false">
-              <svg class="dck" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="m2.5 7.5 3 3 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              <span><span class="dn">Deep</span><span class="dd" style="display:block">Exhaustive crawl, cross-examined claims.</span></span>
-            </button>
+        </div>
+
+        <div class="sugg" id="sugg"></div>
+      </div>
+
+      <!-- RUN VIEW -->
+      <div class="runview" id="runview" aria-live="polite">
+        <div class="qchips" id="qchips"></div>
+        <h2 class="run-q" id="runQ"></h2>
+        <p class="run-meta" id="runMeta"></p>
+        <div class="run-card" id="runCard">
+          <div class="agents" id="agents"></div>
+          <div class="alog" id="alog" aria-hidden="true"></div>
+        </div>
+        <div class="draft" id="draft">
+          <p class="dq" id="draftQ"></p>
+          <div class="db">
+            <a class="dopen" href="report.html">Open report</a>
+            <button class="dagain" id="dagain" type="button">Run another</button>
           </div>
         </div>
-
-        <div class="hintrow">
-          <button class="sched-tgl" id="schedTgl" type="button" aria-expanded="false">
-            <svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><rect x="1" y="2" width="10" height="9" rx="1.5" stroke="currentColor" stroke-width="1.1"/><path d="M1 4.8h10M3.8 1v2M8.2 1v2" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
-            Schedule this run
-          </button>
-          <p class="hint">⌘↵ to run · sources stay attached to every claim</p>
-          <span style="width:118px;flex:0 0 auto"></span>
+        <button class="queue-row" id="queueRow" type="button">Queue another topic</button>
+        <div class="queue-input-wrap" id="queueWrap">
+          <input class="queue-input" id="queueInput" type="text" placeholder="Next question to queue…" aria-label="Queue another topic">
         </div>
-        <div class="sched-row2" id="schedRow2">
-          <button class="freq" type="button" aria-pressed="false" data-freq>Daily</button>
-          <button class="freq" type="button" aria-pressed="true" data-freq>Weekly</button>
-          <button class="freq" type="button" aria-pressed="false" data-freq>One-off</button>
-          <button class="sched-ok" id="schedOk" type="button">Confirm</button>
-        </div>
-      </div>
-
-      <div class="sugg" id="sugg"></div>
-    </div>
-
-    <!-- RUN VIEW -->
-    <div class="runview" id="runview" aria-live="polite">
-      <div class="qchips" id="qchips"></div>
-      <h2 class="run-q" id="runQ"></h2>
-      <p class="run-meta" id="runMeta"></p>
-      <div class="run-card" id="runCard">
-        <div class="agents" id="agents"></div>
-        <div class="alog" id="alog" aria-hidden="true"></div>
-      </div>
-      <div class="draft" id="draft">
-        <p class="dq" id="draftQ"></p>
-        <div class="db">
-          <a class="dopen" href="report.html">Open report</a>
-          <button class="dagain" id="dagain" type="button">Run another</button>
-        </div>
-      </div>
-      <button class="queue-row" id="queueRow" type="button">Queue another topic</button>
-      <div class="queue-input-wrap" id="queueWrap">
-        <input class="queue-input" id="queueInput" type="text" placeholder="Next question to queue…" aria-label="Queue another topic">
       </div>
     </div>
 
-    <!-- CHAT THREAD -->
-    <div class="thread" id="thread" aria-live="polite"></div>
+    <!-- DOCKED BOTTOM BAR -->
+    <div class="bottom-dock" id="bottomDock"></div>
+
   </main>
 </div>
 
@@ -837,13 +722,25 @@ const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const REDUCED = document.documentElement.classList.contains('rm');
 
-/* ================= data — empty until the backend is wired ================= */
-const SESSIONS = { pinned: [], projects: [], projectsMore: [], recents: [] };
-const SUGG_RES = [];
-const SUGG_CHAT = [];
-/* honest notice shown in chat mode until a model is connected */
-const CHAT_NOTICE = 'All model providers are rate-limited right now — the free Gemini tier resets daily. Try again in a few hours; the desk itself is fully wired.';
+/* ================= data ================= */
+const SESSIONS = {
+  pinned: ['Grid-scale battery storage economics', 'Semiconductor export controls timeline'],
+  projects: ['EU AI Act — enforcement watch', 'Coral reef restoration methods'],
+  projectsMore: ['Vertical farming unit economics', 'Municipal broadband outcomes since 2020'],
+  recents: ['Deep-sea mining regulations', 'Sleep debt and next-day cognition', 'Solid-state battery race']
+};
+const SUGG_RES = [
+  { icon: 'doc',   text: 'How do housing subsidies actually affect rents?' },
+  { icon: 'scale', text: 'Compare grid-scale battery storage technologies and their economics' },
+  { icon: 'stack', text: 'What are the latest breakthroughs in quantum error correction?' },
+  { icon: 'doc',   text: 'Map the current state of CRISPR clinical trials and access costs' }
+];
 const API = localStorage.getItem('questApi') || 'http://127.0.0.1:8000';
+let activeProvider = 'groq';
+fetch(API + '/providers')
+  .then(r => r.json())
+  .then(d => { if (d && d.default) activeProvider = d.default; })
+  .catch(() => {});
 const basename = p => (p || '').split(/[\\/]/).pop();
 /* real pipeline stages — server agent labels map onto these rows */
 const AGENTS = ['Strategist', 'Searcher', 'Reader', 'Analyst', 'Writer', 'Critic', 'Refiner', 'Exporter'];
@@ -856,7 +753,6 @@ const ICONS = {
 };
 
 /* ================= state ================= */
-let mode = 'research';
 let depth = 'Standard';
 const srcOn = { Web: true, News: true, Academic: true, Reports: false };
 let running = false;
@@ -880,6 +776,7 @@ function row(text, icon) {
   const b = document.createElement('button');
   b.className = 'srow';
   b.type = 'button';
+  b.title = text;
   if (icon) b.insertAdjacentHTML('beforeend', '<span class="ric">' + ICONS[icon] + '</span>');
   const s = document.createElement('span');
   s.textContent = text;
@@ -887,7 +784,10 @@ function row(text, icon) {
   b.addEventListener('click', () => {
     b.classList.add('flash');
     setTimeout(() => b.classList.remove('flash'), 350);
-    toast('Opening \u201C' + text + '\u201D…');
+    cinput.value = text;
+    try { autoGrow(); sendState(); } catch (_) {}
+    cinput.focus();
+    toast('Loaded into the composer — review it, then run.');
   });
   return b;
 }
@@ -917,6 +817,7 @@ fetch(API + '/sessions').then(r => r.ok ? r.json() : Promise.reject()).then(d =>
     const b = document.createElement('button');
     b.className = 'srow';
     b.type = 'button';
+    b.title = s.topic;
     b.insertAdjacentHTML('beforeend', '<span class="ric">' + ICONS.doc + '</span>');
     const sp = document.createElement('span');
     sp.textContent = s.topic;
@@ -970,47 +871,15 @@ function filterRows(q) {
 const side = $('#side'), collapseBtn = $('#collapseBtn');
 collapseBtn.addEventListener('click', () => {
   const rail = side.classList.toggle('rail');
+  const shell = document.querySelector('.shell');
+  if (shell) shell.classList.toggle('rail-mode', rail);
   collapseBtn.setAttribute('aria-expanded', String(!rail));
   collapseBtn.setAttribute('aria-label', rail ? 'Expand sidebar' : 'Collapse sidebar');
+  collapseBtn.setAttribute('title', rail ? 'Expand sidebar' : 'Collapse sidebar');
 });
 
-/* scheduled popover */
-const schedPop = $('#schedPop');
-let lastFocus = null;
-$$('.navrow')[0].addEventListener('click', e => {
-  if (schedPop.classList.contains('open')) { closeSched(); return; }
-  lastFocus = e.currentTarget;
-  schedPop.hidden = false;
-  const nav = $$('.navrow')[0].getBoundingClientRect();
-  const sideR = side.getBoundingClientRect();
-  schedPop.style.top = (nav.bottom - sideR.top + 8) + 'px';
-  schedPop.style.left = '16px';
-  requestAnimationFrame(() => schedPop.classList.add('open'));
-  const first = $('.pause', schedPop);
-  if (first) first.focus();
-});
-function closeSched() {
-  schedPop.classList.remove('open');
-  setTimeout(() => { schedPop.hidden = true; }, 320);
-  if (lastFocus) { lastFocus.focus(); lastFocus = null; }
-}
-$$('[data-pause]', schedPop).forEach(p => {
-  p.addEventListener('click', () => {
-    const on = p.classList.toggle('on');
-    p.setAttribute('aria-pressed', String(!on));
-    p.setAttribute('aria-label', on ? 'Resume schedule' : 'Pause schedule');
-    p.innerHTML = on
-      ? '<svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3.5 1.5v9M8.5 1.5v9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>'
-      : '<svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 1.8v8.4L10 6 3 1.8Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
-    toast(on ? 'Schedule paused.' : 'Schedule resumed.');
-  });
-});
-$$('.navrow').slice(1).forEach(n => n.addEventListener('click', () => toast('Stubbed in this prototype')));
-$('#footUser').addEventListener('click', () => { window.__nav ? __nav('login.html') : location.href = 'login.html'; });
-/* sidebar cross-links — real pages; unwired rows say so instead of sitting dead */
+/* sidebar cross-links */
 $$('.navrow[data-go]').forEach(b => b.addEventListener('click', () => { window.__nav ? __nav(b.dataset.go) : location.href = b.dataset.go; }));
-$$('.navrow[data-stub]').forEach(b => b.addEventListener('click', () => toast('Coming soon — this area isn\u2019t wired up yet.')));
-$('#footUser').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#footUser').click(); } });
 
 /* new research → refocus composer */
 $('#newResBtn').addEventListener('click', () => {
@@ -1023,33 +892,12 @@ const backdrop = $('#backdrop');
 $('#mobShield').addEventListener('click', () => { side.classList.add('open'); backdrop.classList.add('on'); });
 backdrop.addEventListener('click', () => { side.classList.remove('open'); backdrop.classList.remove('on'); });
 
-/* ================= mode toggle ================= */
-const tind = $('#tind'), modeChat = $('#modeChat'), modeRes = $('#modeRes');
-function placeInd() {
-  const b = (mode === 'chat' ? modeChat : modeRes);
-  tind.style.width = b.offsetWidth + 'px';
-  tind.style.transform = 'translateX(' + (b.offsetLeft - 4) + 'px)';
-}
-function setMode(m) {
-  if (running) { toast('Finish or reset the current run first.'); return; }
-  mode = m;
-  modeChat.classList.toggle('on', m === 'chat');
-  modeRes.classList.toggle('on', m === 'research');
-  modeChat.setAttribute('aria-selected', String(m === 'chat'));
-  modeRes.setAttribute('aria-selected', String(m === 'research'));
-  placeInd();
-  buildSugg();
-  buildGreet();
-  $('#cinput').placeholder = m === 'chat' ? 'Ask Quest anything\u2026' : 'Describe your question — the agents will take it from there.';
-  $('#csend').setAttribute('aria-label', m === 'chat' ? 'Send message' : 'Run research');
-}
-modeChat.addEventListener('click', () => setMode('chat'));
-modeRes.addEventListener('click', () => setMode('research'));
-$('#histBtn').addEventListener('click', () => toast('History is stubbed in this prototype'));
+/* ================= history button ================= */
+$('#histBtn').addEventListener('click', () => { window.__nav ? __nav('history.html') : location.href = 'history.html'; });
 
 /* ================= greeting ================= */
 function buildGreet() {
-  const words = mode === 'chat' ? 'What should we look into?'.split(' ') : 'What do you want to understand?'.split(' ');
+  const words = 'What do you want to understand?'.split(' ');
   const g = $('#greet');
   g.classList.remove('go');
   g.innerHTML = words.map((w, i) =>
@@ -1060,7 +908,7 @@ function buildGreet() {
 
 /* ================= suggestions ================= */
 function buildSugg() {
-  const list = mode === 'chat' ? SUGG_CHAT : SUGG_RES;
+  const list = SUGG_RES;
   const box = $('#sugg');
   box.innerHTML = '';
   list.forEach(s => {
@@ -1083,7 +931,8 @@ function buildSugg() {
 const cinput = $('#cinput'), csend = $('#csend');
 function autoGrow() {
   cinput.style.height = 'auto';
-  cinput.style.height = Math.min(cinput.scrollHeight, 5 * 1.45 * 15.5 + 8) + 'px';
+  const h = Math.min(Math.max(cinput.scrollHeight, 40), 140);
+  cinput.style.height = h + 'px';
 }
 function sendState() {
   csend.classList.toggle('ready', !!cinput.value.trim());
@@ -1140,82 +989,45 @@ $$('#depthPop .ditem').forEach(d => {
   });
 });
 
-/* mic */
-$('#cmic').addEventListener('click', () => toast('Voice intake is stubbed'));
-
-/* schedule */
-const schedTgl = $('#schedTgl'), schedRow2 = $('#schedRow2');
-schedTgl.addEventListener('click', () => {
-  const open = schedRow2.classList.toggle('open');
-  schedTgl.setAttribute('aria-expanded', String(open));
-});
-$$('[data-freq]').forEach(f => {
-  f.addEventListener('click', () => {
-    $$('[data-freq]').forEach(x => x.setAttribute('aria-pressed', String(x === f)));
-  });
-});
-$('#schedOk').addEventListener('click', () => {
-  const freq = $$('[data-freq]').find(f => f.getAttribute('aria-pressed') === 'true');
-  const when = freq && freq.textContent === 'Daily' ? 'tomorrow 09:00' : freq && freq.textContent === 'Weekly' ? 'Monday 09:00' : 'before your next session';
-  toast('Scheduled — see you ' + when + '.');
-  schedRow2.classList.remove('open');
-  schedTgl.setAttribute('aria-expanded', 'false');
-});
-
-/* ================= submit / dock (FLIP) ================= */
+/* ================= submit / dock ================= */
 const composer = $('#composer'), composerWrap = $('#composerWrap');
-const centerCol = $('#centerCol'), runview = $('#runview'), threadEl = $('#thread');
+const centerCol = $('#centerCol'), runview = $('#runview');
+const mainArea = $('#mainArea') || $('.main');
+const centerSlot = $('#centerComposerSlot');
+const bottomDock = $('#bottomDock');
 
 function dockComposer() {
-  const first = composer.getBoundingClientRect();
-  centerCol.style.visibility = 'hidden';
-  const isChatStart = mode === 'chat';
-  runview.classList.toggle('on', !isChatStart);
-  threadEl.classList.toggle('on', isChatStart);
-  composerWrap.style.position = 'fixed';
-  composerWrap.style.visibility = 'visible';
-  composerWrap.style.left = first.left + 'px';
-  composerWrap.style.top = first.top + 'px';
-  composerWrap.style.width = first.width + 'px';
-  composerWrap.style.maxWidth = 'none';
-  composerWrap.style.margin = '0';
-  composerWrap.style.zIndex = '50';
-  composerWrap.style.transition = 'none';
-  composerWrap.style.opacity = '1';
-  composerWrap.style.transform = 'none';
-
-  requestAnimationFrame(() => {
-    const isChat = mode === 'chat';
-    composer.classList.add('docked');
-    if (isChat) composer.classList.remove('dock-pill');
-    else composer.classList.add('dock-pill');
-    // measure final: pinned bottom bar
-    const placeholder = document.createElement('div');
-    placeholder.style.cssText = 'position:fixed;left:0;right:0;bottom:0;padding:' + (isChat ? '18px 24px' : '16px 24px') + ';pointer-events:none;visibility:hidden';
-    document.body.appendChild(placeholder);
-    const targetTop = innerHeight - composerWrap.offsetHeight - (isChat ? 18 : 16) - 8;
-    document.body.removeChild(placeholder);
-    const dy = targetTop - first.top;
-    const dx = (innerWidth - first.width) / 2 - first.left;
-    if (REDUCED) {
-      composerWrap.style.top = targetTop + 'px';
-      composerWrap.style.left = dx + first.left + 'px';
-    } else {
-      composerWrap.style.transition = 'transform .7s cubic-bezier(.22,1,.36,1)';
-      composerWrap.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
-    }
-  });
+  mainArea.classList.add('docked-mode');
+  if (bottomDock && composerWrap.parentElement !== bottomDock) {
+    bottomDock.appendChild(composerWrap);
+  }
+  composer.classList.add('docked', 'dock-pill');
 }
 
 function submit() {
   const q = cinput.value.trim();
   if (!q || running) return;
+  if (window.QuestAuth && !QuestAuth.isAuthenticated()) {
+    QuestAuth.requireAuth(() => {
+      running = true;
+      runNum++;
+      closePops();
+      dockComposer();
+      cinput.value = '';
+      autoGrow();
+      sendState();
+      startRun(q);
+    }, 'Sign in with Google to start research and save private reports.');
+    return;
+  }
   running = true;
   runNum++;
   closePops();
   dockComposer();
-  if (mode === 'chat') startChat(q);
-  else startRun(q);
+  cinput.value = '';
+  autoGrow();
+  sendState();
+  startRun(q);
 }
 csend.addEventListener('click', submit);
 
@@ -1251,22 +1063,35 @@ function startRun(q) {
     const cur = $('.arow2[data-i="' + idx + '"]');
     if (cur) { cur.classList.remove('done'); cur.classList.add('running'); }
   };
+  const logBuf = [];
+  let logRaf = 0;
+  function flushLog() {
+    logRaf = 0;
+    const lines = logBuf.splice(0, logBuf.length);
+    const frag = document.createDocumentFragment();
+    lines.forEach(line => {
+      const d = document.createElement('div');
+      d.textContent = line;
+      frag.appendChild(d);
+    });
+    log.appendChild(frag);
+    while (log.children.length > 8) log.removeChild(log.firstChild);
+  }
   const appendLog = (line) => {
-    const d = document.createElement('div');
-    d.textContent = line;
-    log.appendChild(d);
-    if (log.children.length > 8) log.removeChild(log.firstChild);
+    logBuf.push(line);
+    if (!logRaf) logRaf = requestAnimationFrame(flushLog);
     const m = line.match(/Retrieved (\d+) unique/);
     if (m) { srcCounter.textContent = m[1] + ' sources'; srcCounter.classList.add('show'); }
   };
   let doneFile = '', doneScore = null;
 
+  const authHeaders = window.QuestAuth ? QuestAuth.getAuthHeaders() : {};
   fetch(API + '/research', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({
       topic: q,
-      provider: 'gemini',
+      provider: activeProvider || 'groq',
       max_revisions: depth === 'Deep' ? 2 : depth === 'Quick' ? 0 : 1,
       approval_threshold: depth === 'Deep' ? 8 : depth === 'Quick' ? 6 : 7
     }),
@@ -1369,76 +1194,26 @@ $('#queueInput').addEventListener('keydown', e => {
 });
 
 /* ================= chat ================= */
-function startChat(q) {
-  threadEl.innerHTML = '';
-  const u = document.createElement('div');
-  u.className = 'msg-u';
-  u.textContent = q;
-  threadEl.appendChild(u);
-  const a = document.createElement('div');
-  a.className = 'msg-a';
-  a.innerHTML = '<span class="caret"></span>';
-  threadEl.appendChild(a);
-  threadEl.scrollTop = threadEl.scrollHeight;
-
-  // typewriter for whatever the backend (or the honest notice) hands back
-  const caret = '<span class="caret"></span>';
-  const typeIn = (text) => {
-    let ci = 0;
-    const iv = setInterval(() => {
-      ci += REDUCED ? text.length : 6;
-      const done = ci >= text.length;
-      a.innerHTML = escapeHtml(text.slice(0, done ? text.length : ci)) + (done ? '' : caret);
-      threadEl.scrollTop = threadEl.scrollHeight;
-      if (done) {
-        clearInterval(iv);
-        const hint = document.createElement('p');
-        hint.className = 'switch-hint';
-        hint.innerHTML = 'need a full brief? <button type="button">switch to Research ↑</button>';
-        $('button', hint).addEventListener('click', () => { setMode('research'); });
-        threadEl.appendChild(hint);
-        threadEl.scrollTop = threadEl.scrollHeight;
-      }
-    }, REDUCED ? 1 : 18);
-  };
-
-  fetch(API + '/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: q })
-  })
-    .then(r => r.json().then(d => ({ ok: r.ok, d })))
-    .then(({ ok, d }) => {
-      if (!ok) throw new Error(d && d.detail ? String(d.detail) : 'chat unavailable');
-      typeIn(d.reply || CHAT_NOTICE);
-    })
-    .catch(() => typeIn(CHAT_NOTICE));
-}
-function escapeHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 /* ================= reset ================= */
 function resetToEmpty() {
   if (runAbort) { runAbort.abort(); runAbort = null; }
   running = false;
   $('.dopen').style.display = '';
-  runview.classList.remove('on');
-  threadEl.classList.remove('on');
-  threadEl.innerHTML = '';
+  mainArea.classList.remove('docked-mode');
+  if (centerSlot && composerWrap.parentElement !== centerSlot) {
+    centerSlot.appendChild(composerWrap);
+  }
+  composer.classList.remove('docked', 'dock-pill');
+  composerWrap.style.cssText = '';
   $('#draft').classList.remove('show');
   $('#agents').innerHTML = '';
   $('#alog').innerHTML = '';
   $('#qchips').innerHTML = '';
   $('#queueWrap').classList.remove('open');
-  centerCol.style.visibility = '';
-  composerWrap.style.cssText = '';
-  composer.classList.remove('docked', 'dock-pill');
   cinput.value = '';
   autoGrow();
   sendState();
   buildGreet();
-  placeInd();
 }
 $('#dagain').addEventListener('click', resetToEmpty);
 
@@ -1446,12 +1221,10 @@ $('#dagain').addEventListener('click', resetToEmpty);
 function closePops() {
   if (srcPop.classList.contains('open')) { srcPop.classList.remove('open'); cplus.setAttribute('aria-expanded', 'false'); cplus.focus(); }
   if (depthPop.classList.contains('open')) { depthPop.classList.remove('open'); cdepth.setAttribute('aria-expanded', 'false'); cdepth.focus(); }
-  if (schedPop.classList.contains('open')) closeSched();
 }
 document.addEventListener('pointerdown', e => {
   if (!e.target.closest('#cplus') && !e.target.closest('#srcPop') && srcPop.classList.contains('open')) { srcPop.classList.remove('open'); cplus.setAttribute('aria-expanded', 'false'); }
   if (!e.target.closest('#cdepth') && !e.target.closest('#depthPop') && depthPop.classList.contains('open')) { depthPop.classList.remove('open'); cdepth.setAttribute('aria-expanded', 'false'); }
-  if (!e.target.closest('.navrow') && !e.target.closest('#schedPop') && schedPop.classList.contains('open')) closeSched();
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
@@ -1467,7 +1240,6 @@ document.addEventListener('keydown', e => {
 /* ================= deep link ================= */
 function deepLink() {
   const p = new URLSearchParams(location.search);
-  if (p.get('mode') === 'chat') setMode('chat');
   const q = p.get('q');
   if (!q) { if (p.get('focus') === '1') setTimeout(() => cinput.focus(), REDUCED ? 60 : 500); return false; }
   cinput.value = q;
@@ -1480,7 +1252,7 @@ function deepLink() {
 
 /* ================= entrance ================= */
 /* sidebar stagger */
-$$('.side .navrow, .side .sect, .side .newres, .side-foot').forEach((el, i) => {
+$$('.side .navrow, .side .sect, .side .newres').forEach((el, i) => {
   el.style.opacity = '0';
   el.style.transform = 'translateX(-12px)';
   el.style.transition = 'opacity .6s cubic-bezier(.22,1,.36,1) ' + (i * 40) + 'ms,transform .6s cubic-bezier(.22,1,.36,1) ' + (i * 40) + 'ms';
@@ -1492,21 +1264,13 @@ $$('.side .navrow, .side .sect, .side .newres, .side-foot').forEach((el, i) => {
 document.body.classList.add('loaded');
 buildGreet();
 buildSugg();
-placeInd();
 autoGrow();
 const linked = deepLink();
 if (!linked) setTimeout(() => cinput.focus(), REDUCED ? 30 : 1300);
 
-/* window resize keeps the docked bar pinned bottom-right */
+/* window resize auto-adjusts layout via Flexbox & Grid */
 window.addEventListener('resize', () => {
-  if (composerWrap.style.position === 'fixed') {
-    composerWrap.style.left = '';
-    composerWrap.style.right = '24px';
-    composerWrap.style.top = (innerHeight - composerWrap.offsetHeight - 24) + 'px';
-    composerWrap.style.width = 'min(780px, calc(100% - 48px))';
-    composerWrap.style.transform = 'none';
-  }
-  placeInd();
+  autoGrow();
 });
 
 })();
@@ -1525,7 +1289,7 @@ window.addEventListener('resize', () => {
     if (!url || url.charAt(0) === '#') return;
     if (REDUCED) { location.href = url; return; }
     veil.classList.add('on');
-    setTimeout(function(){ location.href = url; }, 330);
+    setTimeout(function(){ location.href = url; }, 100);
   };
 
   /* intercept in-page <a> clicks to same-origin .html targets */
@@ -1543,14 +1307,14 @@ window.addEventListener('resize', () => {
     window.__nav(href);
   }, false);
 
-  /* arriving: start covered, unveil — gives every page a choreographed entrance */
+  /* arriving: quick unveil */
   veil.classList.add('on');
   var unveil = function(){
     veil.classList.remove('on');
     if (window.__scrollOnLoad) window.__scrollOnLoad();
   };
-  if (document.readyState === 'complete') setTimeout(unveil, 260);
-  else window.addEventListener('load', function(){ setTimeout(unveil, 260); });
+  if (document.readyState === 'complete') setTimeout(unveil, 60);
+  else window.addEventListener('load', function(){ setTimeout(unveil, 60); });
 })();
 </script>
 
@@ -1645,7 +1409,7 @@ window.addEventListener('resize', () => {
   }
 
   window.__lens = lens;
-  var TARGETS = ['#sideScroll', '#runview', '#thread'];
+  var TARGETS = ['#sideScroll', '#runview'];
   TARGETS.forEach(function(sel){
     var el = sel === null ? (document.scrollingElement || document.documentElement) : document.querySelector(sel);
     if (el) lens(el);

@@ -152,6 +152,7 @@ class WikipediaSearch(BaseSearchSource):
         try:
             resp = requests.get(
                 "https://en.wikipedia.org/w/api.php",
+                headers={"User-Agent": "ResearchAI/1.0 (https://github.com/ayushgupta-h/AI_Reasearch)"},
                 params={
                     "action": "query",
                     "list": "search",

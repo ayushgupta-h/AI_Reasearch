@@ -44,6 +44,9 @@ from __future__ import annotations
 
 import sys
 import os
+import re
+import hmac
+import hashlib
 import json
 import time
 import asyncio
@@ -62,15 +65,27 @@ if sys.platform.startswith("win"):
 
 from pathlib import Path
 
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
 from dotenv import load_dotenv  # ensure API keys from backend/.env are visible server-wide
 
+load_dotenv(_BACKEND_DIR / ".env")
+load_dotenv(_BACKEND_DIR.parent / ".env")
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
+
+from auth_validator import (
+    get_current_user,
+    get_optional_user,
+    get_supabase_url,
+    get_supabase_anon_key,
+)
 
 # ─── App Initialisation ───────────────────────────────────────────────────────
 
@@ -87,18 +102,22 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5500",
+        "http://127.0.0.1:5500",
+        "http://localhost:8123",
+        "http://127.0.0.1:8123",
+        "http://localhost:3000",
+        "*",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ─── Report Artifacts (served for the frontend) ──────────────────────────────
-# Generated .md / .docx / .pdf files live next to this module; expose them so
-# the UI can render reports and offer downloads.
+# ─── Report Artifacts Directory ──────────────────────────────────────────────
 REPORTS_DIR = Path(__file__).resolve().parent / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
 
 # ─── Request / Response Models ────────────────────────────────────────────────
 
@@ -113,9 +132,9 @@ class ResearchRequest(BaseModel):
         examples=["Impact of large language models on scientific discovery"],
     )
     provider: str = Field(
-        default="gemini",
-        description="LLM provider: 'gemini', 'openai', 'mistral', or 'huggingface'.",
-        examples=["gemini"],
+        default_factory=lambda: os.getenv("LLM_PROVIDER", "groq"),
+        description="LLM provider: 'groq', 'gemini', 'mistral', or 'huggingface'.",
+        examples=["groq"],
     )
     max_revisions: int = Field(
         default=2,
@@ -132,6 +151,10 @@ class ResearchRequest(BaseModel):
     output_dir: str = Field(
         default=str(Path(__file__).resolve().parent / "reports"),
         description="Directory where the final report artifacts (.md, .docx, .pdf) are saved.",
+    )
+    user_id: Optional[str] = Field(
+        default=None,
+        description="Authenticated user ID to associate with this research run.",
     )
 
 
@@ -157,6 +180,31 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     provider: str
+
+
+class ExportRequest(BaseModel):
+    """Body accepted by POST /export."""
+    content: str = Field(..., description="Draft markdown content to export.")
+    topic: Optional[str] = Field("Research Report", description="Research topic or report title.")
+    format: str = Field("pdf", description="Target format: 'pdf', 'docx', 'md', or 'txt'.")
+    citation_style: Optional[str] = Field("apa", description="Citation style: 'apa', 'mla', or 'harvard'.")
+
+
+def _get_share_secret() -> bytes:
+    secret = os.getenv("SHARE_SECRET") or os.getenv("CHROMA_ENCRYPTION_KEY") or "quest_report_share_secret_2026"
+    return secret.encode("utf-8")
+
+
+def generate_share_token(filename: str) -> str:
+    clean = Path(filename).name
+    return hmac.new(_get_share_secret(), clean.encode("utf-8"), hashlib.sha256).hexdigest()[:24]
+
+
+def verify_share_token(filename: str, token: str) -> bool:
+    if not token:
+        return False
+    expected = generate_share_token(filename)
+    return hmac.compare_digest(expected, token)
 
 
 # ─── SSE Helpers ─────────────────────────────────────────────────────────────
@@ -302,7 +350,13 @@ def _chat_via_provider(provider: str, message: str) -> str:
         llm = ChatMistralAI(model="mistral-small-latest", temperature=0.4)
     else:
         from langchain_google_genai import ChatGoogleGenerativeAI
-        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.4)
+        llm = ChatGoogleGenerativeAI(
+                model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+                google_api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
+                temperature=0.4,
+                max_retries=0,
+                timeout=15,
+            )
 
     result = llm.invoke([("system", system_prompt), ("user", message)])
     content = result.content
@@ -406,6 +460,7 @@ def _run_research_in_thread(
                 final_state,
                 duration_seconds=time.time() - started_at,
                 notes=f"provider={used_provider}",
+                user_id=request.user_id,
             )
         except Exception as save_exc:
             event_queue.put(("progress", f"Session persistence skipped: {save_exc}"))
@@ -513,22 +568,198 @@ async def health_check() -> HealthResponse:
     return HealthResponse(status="ok", version="1.0.0")
 
 
+@app.get("/auth/config", tags=["Auth"])
+async def auth_config():
+    """Return Supabase configuration for client-side authentication."""
+    return {
+        "supabaseUrl": get_supabase_url(),
+        "supabaseAnonKey": get_supabase_anon_key(),
+    }
+
+
+@app.get("/auth/me", tags=["Auth"])
+async def auth_me(current_user: dict = Depends(get_current_user)):
+    """Return the profile of the currently authenticated user."""
+    return {"status": "authenticated", "user": current_user}
+
+
 @app.get("/providers", response_model=ProvidersResponse, tags=["System"])
 async def list_providers() -> ProvidersResponse:
     """Returns the list of supported LLM providers."""
     return ProvidersResponse(
-        providers=["gemini", "groq", "mistral", "huggingface", "openai"],
-        default="gemini",
+        providers=["groq", "gemini", "mistral", "huggingface"],
+        default=os.getenv("LLM_PROVIDER", "groq"),
     )
 
 
 @app.get("/sessions", response_model=SessionsResponse, tags=["System"])
-async def list_sessions() -> SessionsResponse:
-    """Return all past research sessions (newest first) for the History/Dashboard UI."""
+async def list_sessions(current_user: Optional[dict] = Depends(get_optional_user)) -> SessionsResponse:
+    """Return past research sessions. When authenticated, strictly filters by user ID."""
     from session_manager import SessionManager
 
-    sessions = SessionManager().get_all_sessions()
+    user_id = current_user.get("user_id") if current_user else None
+    sessions = SessionManager().get_all_sessions(user_id=user_id)
     return SessionsResponse(sessions=sessions, count=len(sessions))
+
+
+@app.delete("/sessions/{session_id}", tags=["System"])
+async def delete_session_endpoint(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a research session record owned by the authenticated user."""
+    from session_manager import SessionManager
+    deleted = SessionManager().delete_session(session_id, user_id=current_user["user_id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found or not owned by user.")
+    return {"status": "deleted", "session_id": session_id}
+
+
+@app.get("/reports/{filename:path}/share", tags=["Reports"])
+async def get_report_share_link(
+    filename: str,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """
+    Generate a read-only share token and link for a report.
+    Accessible to the owner of the report or unauthenticated runs.
+    """
+    from session_manager import SessionManager
+    sm = SessionManager()
+
+    clean_filename = Path(filename).name
+    file_path = (REPORTS_DIR / clean_filename).resolve()
+
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Report file not found.")
+
+    if current_user:
+        if not sm.user_owns_report(current_user["user_id"], clean_filename):
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this research report.")
+
+    token = generate_share_token(clean_filename)
+    return {
+        "filename": clean_filename,
+        "share_token": token,
+        "share_url": f"/report.html?run={clean_filename}&share={token}",
+    }
+
+
+@app.get("/reports/{filename:path}", tags=["Reports"])
+async def get_report_file(
+    filename: str,
+    share: Optional[str] = Query(None),
+    token: Optional[str] = Query(None),
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """
+    Serve a generated research report (.md, .docx, .pdf, .txt).
+    Enforces user isolation, with secure read-only token bypass for shared links.
+    """
+    from session_manager import SessionManager
+    sm = SessionManager()
+
+    clean_filename = Path(filename).name
+    file_path = (REPORTS_DIR / clean_filename).resolve()
+
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Report file not found.")
+
+    # 1. Check share token for read-only access
+    is_valid_share = False
+    if share and verify_share_token(clean_filename, share):
+        is_valid_share = True
+
+    # 2. Check query param JWT token if provided
+    if not current_user and token:
+        try:
+            from auth_validator import validate_jwt_token
+            current_user = validate_jwt_token(token)
+        except Exception:
+            current_user = None
+
+    if not is_valid_share:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required to view this report.")
+        if not sm.user_owns_report(current_user["user_id"], clean_filename):
+            raise HTTPException(status_code=403, detail="Access denied: You do not own this research report.")
+
+    media_type = "text/markdown; charset=utf-8"
+    if clean_filename.endswith(".pdf"):
+        media_type = "application/pdf"
+    elif clean_filename.endswith(".docx"):
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif clean_filename.endswith(".txt"):
+        media_type = "text/plain; charset=utf-8"
+
+    response_headers = {}
+    if is_valid_share:
+        response_headers["X-Read-Only"] = "true"
+
+    return FileResponse(file_path, media_type=media_type, filename=clean_filename, headers=response_headers)
+
+
+@app.post("/export", tags=["Reports"])
+async def export_report(
+    req: ExportRequest,
+    current_user: Optional[dict] = Depends(get_optional_user),
+):
+    """
+    Export research report draft content to PDF, DOCX, Markdown, or TXT.
+    Applies the selected citation style (APA, MLA, Harvard).
+    Generates meaningful topic-based filenames and returns the downloadable file.
+    """
+    from report_exporter import ReportExporter
+
+    raw_content = (req.content or "").strip()
+    if not raw_content:
+        raise HTTPException(status_code=400, detail="Cannot export an empty report draft.")
+
+    fmt = (req.format or "pdf").lower().strip().lstrip(".")
+    if fmt not in ("pdf", "docx", "md", "txt"):
+        raise HTTPException(status_code=400, detail=f"Unsupported format '{req.format}'. Supported formats: pdf, docx, md, txt")
+
+    # Generate meaningful filename from topic
+    topic_str = (req.topic or "research_report").strip()
+    clean_slug = re.sub(r"[^\w\s-]", "", topic_str).strip().lower()
+    clean_slug = re.sub(r"[-\s]+", "_", clean_slug)[:60].strip("_")
+    if not clean_slug:
+        clean_slug = "research_report"
+
+    timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+    ext_map = {"pdf": ".pdf", "docx": ".docx", "md": ".md", "txt": ".txt"}
+    out_ext = ext_map.get(fmt, f".{fmt}")
+    out_filename = f"quest_{clean_slug}_{timestamp_str}{out_ext}"
+
+    export_dir = REPORTS_DIR / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    target_path = export_dir / out_filename
+
+    try:
+        exporter = ReportExporter()
+        saved_path = exporter.export_single(
+            markdown_text=raw_content,
+            fmt=fmt,
+            output_path=target_path,
+            citation_style=req.citation_style or "apa",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to export {fmt.upper()}: {str(exc)}")
+
+    media_map = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "md": "text/markdown; charset=utf-8",
+        "txt": "text/plain; charset=utf-8",
+    }
+    media_type = media_map.get(fmt, "application/octet-stream")
+
+    return FileResponse(
+        saved_path,
+        media_type=media_type,
+        filename=out_filename,
+        headers={"Content-Disposition": f'attachment; filename="{out_filename}"'},
+    )
 
 
 @app.post("/chat", response_model=ChatResponse, tags=["Research"])
@@ -566,30 +797,19 @@ async def chat(request: ChatRequest) -> ChatResponse:
         "keys: event, message, agent (optional), data (optional)."
     ),
 )
-async def run_research(request: ResearchRequest) -> StreamingResponse:
+async def run_research(
+    request: ResearchRequest,
+    current_user: Optional[dict] = Depends(get_optional_user),
+) -> StreamingResponse:
     """
     Start a multi-agent research pipeline and stream progress back as
     **Server-Sent Events (SSE)**.
-
-    ### SSE Event Types
-
-    | Event | Description |
-    |---|---|
-    | `progress` | Raw pipeline log line from any agent |
-    | `agent_start` | An agent node has become active |
-    | `agent_done` | An agent node completed (future) |
-    | `complete` | Pipeline finished — `data` contains result metadata |
-    | `error` | Unrecoverable error — `data` contains message + traceback |
-
-    ### Example (curl)
-    ```bash
-    curl -N -X POST http://localhost:8000/research \\
-         -H "Content-Type: application/json" \\
-         -d '{"topic": "Quantum computing"}'
-    ```
     """
     if not request.topic.strip():
         raise HTTPException(status_code=422, detail="topic cannot be empty.")
+
+    if current_user:
+        request.user_id = current_user.get("user_id")
 
     return StreamingResponse(
         _sse_generator(request),

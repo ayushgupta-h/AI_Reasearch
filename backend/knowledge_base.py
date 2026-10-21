@@ -12,7 +12,8 @@ Architecture
 - Embedding model : ``sentence-transformers/all-MiniLM-L6-v2`` (local, free)
   Falls back to LangChain's ``FakeEmbeddings`` if sentence-transformers is
   not installed, allowing the pipeline to run without GPU or API keys.
-- Vector store    : ChromaDB (local persistent directory ``./chroma_db/``)
+- Vector store    : ChromaDB — Cloud (api.trychroma.com) when CHROMA_API_KEY is set,
+                   otherwise local persistent directory ``./chroma_db/``
 - Collection      : One collection per research topic (slug-ified name)
 
 Usage
@@ -34,6 +35,7 @@ Usage
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import hashlib
@@ -53,6 +55,8 @@ if sys.platform.startswith("win"):
         pass
 
 console = Console()
+
+from crypto_utils import encrypt_text, decrypt_text, is_encrypted
 
 # Default persistent directory for ChromaDB files
 _DEFAULT_PERSIST_DIR = str(Path(__file__).parent / "chroma_db")
@@ -180,23 +184,75 @@ class ResearchKnowledgeBase:
         return f"rai-{slug}" if slug else "rai-default"
 
     def _get_vectorstore(self):
-        """Lazy-initialise the ChromaDB LangChain vectorstore."""
+        """Lazy-initialise the ChromaDB LangChain vectorstore.
+
+        If CHROMA_API_KEY, CHROMA_TENANT, and CHROMA_DATABASE are all present in
+        the environment the vectorstore will connect to ChromaDB Cloud.  Otherwise
+        it falls back to a local on-disk database (development / offline mode).
+        """
         if self._vectorstore is None:
             try:
                 from langchain_chroma import Chroma  # type: ignore
             except ImportError:
                 from langchain_community.vectorstores import Chroma  # type: ignore
 
-            Path(self.persist_dir).mkdir(parents=True, exist_ok=True)
-            self._vectorstore = Chroma(
-                collection_name=self._collection_name,
-                embedding_function=self.embeddings,
-                persist_directory=self.persist_dir,
-            )
-            console.print(
-                f"  [dim]🗃️  ChromaDB collection [cyan]{self._collection_name}[/cyan] "
-                f"ready at [dim]{self.persist_dir}[/dim][/dim]"
-            )
+            chroma_api_key  = os.getenv("CHROMA_API_KEY")
+            chroma_tenant   = os.getenv("CHROMA_TENANT")
+            chroma_database = os.getenv("CHROMA_DATABASE")
+
+            if chroma_api_key and chroma_tenant and chroma_database:
+                # ── Cloud mode ────────────────────────────────────────
+                try:
+                    import chromadb  # type: ignore
+                    chroma_client = chromadb.CloudClient(
+                        tenant=chroma_tenant,
+                        database=chroma_database,
+                        api_key=chroma_api_key,
+                    )
+                    self._vectorstore = Chroma(
+                        client=chroma_client,
+                        collection_name=self._collection_name,
+                        embedding_function=self.embeddings,
+                    )
+                    console.print(
+                        f"  [dim]☁️  ChromaDB Cloud collection [cyan]{self._collection_name}[/cyan] "
+                        f"(tenant=[green]{chroma_tenant}[/green], db=[green]{chroma_database}[/green])[/dim]"
+                    )
+                except Exception as cloud_err:
+                    console.print(
+                        f"  [yellow]⚠️  ChromaDB Cloud failed ({cloud_err}), falling back to local.[/yellow]"
+                    )
+                    Path(self.persist_dir).mkdir(parents=True, exist_ok=True)
+                    self._vectorstore = Chroma(
+                        collection_name=self._collection_name,
+                        embedding_function=self.embeddings,
+                        persist_directory=self.persist_dir,
+                    )
+            else:
+                # ── Local fallback ────────────────────────────────────
+                Path(self.persist_dir).mkdir(parents=True, exist_ok=True)
+                self._vectorstore = Chroma(
+                    collection_name=self._collection_name,
+                    embedding_function=self.embeddings,
+                    persist_directory=self.persist_dir,
+                )
+                console.print(
+                    f"  [dim]🗃️  ChromaDB local collection [cyan]{self._collection_name}[/cyan] "
+                    f"at [dim]{self.persist_dir}[/dim][/dim]"
+                )
+
+            # Wrap similarity_search to transparently decrypt page_content
+            orig_similarity_search = self._vectorstore.similarity_search
+
+            def _decrypting_similarity_search(*args, **kwargs):
+                docs = orig_similarity_search(*args, **kwargs)
+                for d in docs:
+                    if hasattr(d, "page_content"):
+                        d.page_content = decrypt_text(d.page_content)
+                return docs
+
+            self._vectorstore.similarity_search = _decrypting_similarity_search
+
         return self._vectorstore
 
     # ── Indexing ──────────────────────────────────────────────────
@@ -237,10 +293,24 @@ class ResearchKnowledgeBase:
         batch_size = 100
         for start in range(0, len(all_chunks), batch_size):
             end = start + batch_size
-            vs.add_texts(
-                texts=all_chunks[start:end],
-                metadatas=all_metas[start:end],
-                ids=all_ids[start:end],
+            batch_texts = all_chunks[start:end]
+            batch_metas = all_metas[start:end]
+            batch_ids = all_ids[start:end]
+
+            # 1. Compute embeddings from the original PLAINTEXT texts
+            # so vector similarity search continues working accurately
+            batch_embeddings = self.embeddings.embed_documents(batch_texts)
+
+            # 2. Encrypt the customer texts with AES-256-GCM
+            # so the ChromaDB dashboard displays ciphertext
+            encrypted_texts = [encrypt_text(t) for t in batch_texts]
+
+            # 3. Store ciphertext documents with plaintext embeddings into ChromaDB
+            vs._collection.upsert(
+                ids=batch_ids,
+                documents=encrypted_texts,
+                embeddings=batch_embeddings,
+                metadatas=batch_metas,
             )
 
         self._indexed_count += len(all_chunks)
@@ -328,7 +398,13 @@ class ResearchKnowledgeBase:
             if filter_meta:
                 kwargs["filter"] = filter_meta
             docs = vs.similarity_search(query, **kwargs)
-            return [{"content": d.page_content, "metadata": d.metadata} for d in docs]
+            return [
+                {
+                    "content": decrypt_text(d.page_content),
+                    "metadata": d.metadata,
+                }
+                for d in docs
+            ]
         except Exception as exc:
             console.print(f"  [dim red]⚠ RAG retrieval error: {exc}[/dim red]")
             return []
