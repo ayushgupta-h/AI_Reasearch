@@ -26,12 +26,26 @@
      */
     async resolveConfig() {
       // 1. Check window.__ENV__
-      let url = window.__ENV__?.SUPABASE_URL || window.__ENV__?.NEXT_PUBLIC_SUPABASE_URL;
-      let key = window.__ENV__?.SUPABASE_ANON_KEY || window.__ENV__?.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+      let url = window.__ENV__?.SUPABASE_URL || window.__ENV__?.NEXT_PUBLIC_SUPABASE_URL || window.__ENV__?.VITE_SUPABASE_URL;
+      let key = window.__ENV__?.SUPABASE_ANON_KEY || window.__ENV__?.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || window.__ENV__?.VITE_SUPABASE_ANON_KEY || window.__ENV__?.SUPABASE_PUBLISHABLE_KEY;
+
+      // Discard stale old project references if present in window.__ENV__
+      if (url && url.includes('sldgiglemcswtqxgobpg')) url = null;
+      if (key && (key.includes('6X9XiRuSzEe') || key.startsWith('sb_publishable_'))) key = null;
 
       // 2. Check localStorage overrides
       if (!url) url = localStorage.getItem('quest_supabase_url');
       if (!key) key = localStorage.getItem('quest_supabase_anon_key');
+
+      // Discard and purge stale old project references from browser localStorage
+      if (url && url.includes('sldgiglemcswtqxgobpg')) {
+        url = null;
+        try { localStorage.removeItem('quest_supabase_url'); } catch (_) {}
+      }
+      if (key && (key.includes('6X9XiRuSzEe') || key.startsWith('sb_publishable_'))) {
+        key = null;
+        try { localStorage.removeItem('quest_supabase_anon_key'); } catch (_) {}
+      }
 
       // 3. Check backend API config
       if (!url || !key) {
@@ -39,16 +53,21 @@
           const resp = await fetch(API + '/auth/config');
           if (resp.ok) {
             const data = await resp.json();
-            if (!url && data.supabaseUrl) url = data.supabaseUrl;
-            if (!key && data.supabaseAnonKey) key = data.supabaseAnonKey;
+            if (!url && data.supabaseUrl && !data.supabaseUrl.includes('sldgiglemcswtqxgobpg')) {
+              url = data.supabaseUrl;
+            }
+            if (!key && data.supabaseAnonKey && !data.supabaseAnonKey.includes('6X9XiRuSzEe') && !data.supabaseAnonKey.startsWith('sb_publishable_')) {
+              key = data.supabaseAnonKey;
+            }
           }
         } catch (_) {
           /* backend might be offline or using different port */
         }
       }
 
-      this.supabaseUrl = url || 'https://sldgiglemcswtqxgobpg.supabase.co';
-      this.supabaseAnonKey = key || 'sb_publishable_6X9XiRuSzEe-vZvp7u7LBA_NPYFp2wU';
+      // 4. Default fallback: verified active Supabase project configuration
+      this.supabaseUrl = url || 'https://vxqalflbzpjkvmtbbqrv.supabase.co';
+      this.supabaseAnonKey = key || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ4cWFsZmxienBqa3ZtdGJicXJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3ODQyNzgsImV4cCI6MjA5MzM2MDI3OH0.Itqr5hTJLCULhkQr_pc6qg0h0dTWkJbb2CRdChCN5h4';
 
       return { url: this.supabaseUrl, key: this.supabaseAnonKey };
     },
@@ -83,26 +102,18 @@
               auth: {
                 persistSession: true,
                 autoRefreshToken: true,
-                detectSessionInUrl: true,
+                detectSessionInUrl: false, // Handled explicitly below to avoid race conditions
                 storage: window.localStorage,
               },
             });
 
-            // Restore active session
-            const { data } = await this.client.auth.getSession();
-            if (data && data.session) {
-              this.session = data.session;
-              this.user = data.session.user;
-            }
-
-            // Listen for OAuth redirects and auth state changes
+            // 1. Listen for auth state changes immediately so no events are lost
             this.client.auth.onAuthStateChange((event, session) => {
+              console.log('[QuestAuth] Auth state change event:', event, session ? session.user?.email : 'no user');
               this.session = session;
               this.user = session ? session.user : null;
-              if (session && window.location.hash && (window.location.hash.includes('access_token') || window.location.hash.includes('error='))) {
-                try {
-                  history.replaceState(null, document.title, window.location.pathname + window.location.search);
-                } catch (_) {}
+              if (session) {
+                this._cleanAuthUrlParams();
               }
               this._notifyListeners(event, session);
               this.updateUI();
@@ -114,6 +125,114 @@
                 );
               } catch (_) {}
             });
+
+            // 2. Check for OAuth callback errors in URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const hashRaw = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+            const hashParams = new URLSearchParams(hashRaw);
+            const oauthErrDesc = urlParams.get('error_description') || hashParams.get('error_description');
+            const oauthErr = urlParams.get('error') || hashParams.get('error');
+
+            if (oauthErrDesc || oauthErr) {
+              const msg = oauthErrDesc || oauthErr;
+              console.error('[QuestAuth] OAuth error callback:', msg);
+              alert('Authentication error from provider: ' + decodeURIComponent(msg.replace(/\+/g, ' ')));
+              this._cleanAuthUrlParams();
+            }
+
+            // 3. Handle Implicit OAuth tokens if present in hash fragment (#access_token=...)
+            const hashAccessToken = hashParams.get('access_token');
+            const hashRefreshToken = hashParams.get('refresh_token');
+            if (hashAccessToken) {
+              const jwtPayload = this._parseJwt(hashAccessToken);
+              if (jwtPayload && jwtPayload.sub) {
+                const userObj = {
+                  id: jwtPayload.sub,
+                  email: jwtPayload.email || '',
+                  user_metadata: jwtPayload.user_metadata || {},
+                  app_metadata: jwtPayload.app_metadata || {},
+                  role: jwtPayload.role || 'authenticated',
+                };
+                this.session = {
+                  access_token: hashAccessToken,
+                  refresh_token: hashRefreshToken || '',
+                  expires_at: jwtPayload.exp,
+                  user: userObj,
+                };
+                this.user = userObj;
+                try {
+                  localStorage.setItem('quest_active_session', JSON.stringify(this.session));
+                } catch (_) {}
+                console.log('[QuestAuth] Validated JWT session from OAuth redirect for:', this.user?.email);
+                this._cleanAuthUrlParams();
+              }
+
+              // Also notify Supabase SDK client in background if initialized
+              if (this.client && typeof this.client.auth.setSession === 'function') {
+                try {
+                  await this.client.auth.setSession({
+                    access_token: hashAccessToken,
+                    refresh_token: hashRefreshToken || '',
+                  });
+                } catch (hashEx) {
+                  console.info('[QuestAuth] Supabase SDK client setSession background note:', hashEx);
+                }
+              }
+            }
+
+            // 4. Handle PKCE OAuth auth code if present in query parameters (?code=...)
+            const authCode = urlParams.get('code');
+            if (!this.session && authCode && typeof this.client.auth.exchangeCodeForSession === 'function') {
+              try {
+                console.log('[QuestAuth] Exchanging PKCE code for session...');
+                const { data: exData, error: exErr } = await this.client.auth.exchangeCodeForSession(authCode);
+                if (exErr) {
+                  console.error('[QuestAuth] exchangeCodeForSession returned error:', exErr);
+                  alert('Sign in code exchange failed: ' + (exErr.message || JSON.stringify(exErr)));
+                } else if (exData && exData.session) {
+                  this.session = exData.session;
+                  this.user = exData.session.user;
+                  try {
+                    localStorage.setItem('quest_active_session', JSON.stringify(this.session));
+                  } catch (_) {}
+                  console.log('[QuestAuth] PKCE exchange successful for:', this.user?.email);
+                  this._cleanAuthUrlParams();
+                }
+              } catch (ex) {
+                console.error('[QuestAuth] PKCE code exchange exception:', ex);
+                alert('Sign in exception: ' + (ex.message || ex));
+              }
+            }
+
+            // 5. Restore active session if not already set from current redirect
+            if (!this.session) {
+              try {
+                const stored = localStorage.getItem('quest_active_session');
+                if (stored) {
+                  const parsed = JSON.parse(stored);
+                  if (parsed && parsed.access_token) {
+                    const payload = this._parseJwt(parsed.access_token);
+                    // Check token expiration (give 30s buffer)
+                    if (payload && payload.exp && payload.exp * 1000 > Date.now() + 30000) {
+                      this.session = parsed;
+                      this.user = parsed.user;
+                    } else {
+                      localStorage.removeItem('quest_active_session');
+                    }
+                  }
+                }
+              } catch (_) {}
+            }
+            if (!this.session && this.client) {
+              try {
+                const { data } = await this.client.auth.getSession();
+                if (data && data.session) {
+                  this.session = data.session;
+                  this.user = data.session.user;
+                  this._cleanAuthUrlParams();
+                }
+              } catch (_) {}
+            }
           } catch (err) {
             console.warn('[QuestAuth] Client init failed:', err);
           }
@@ -179,6 +298,58 @@
           console.error(e);
         }
       });
+    },
+
+    /**
+     * Removes temporary OAuth parameters (?code=..., #access_token=...) from address bar.
+     */
+    _cleanAuthUrlParams() {
+      try {
+        const hasCode = window.location.search && (
+          window.location.search.includes('code=') ||
+          window.location.search.includes('error=') ||
+          window.location.search.includes('error_description=')
+        );
+        const hasHash = window.location.hash && (
+          window.location.hash.includes('access_token=') ||
+          window.location.hash.includes('error=') ||
+          window.location.hash.includes('error_description=')
+        );
+
+        if (hasCode || hasHash) {
+          const params = new URLSearchParams(window.location.search);
+          params.delete('code');
+          params.delete('state');
+          params.delete('error');
+          params.delete('error_description');
+          params.delete('error_code');
+          const cleanQuery = params.toString() ? ('?' + params.toString()) : '';
+          const cleanUrl = window.location.pathname + cleanQuery;
+          window.history.replaceState(null, document.title, cleanUrl);
+        }
+      } catch (_) {}
+    },
+
+    /**
+     * Safely decodes a JWT without external libraries.
+     */
+    _parseJwt(token) {
+      if (!token || typeof token !== 'string') return null;
+      try {
+        const parts = token.split('.');
+        if (parts.length < 2) return null;
+        const base64Url = parts[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(
+          atob(base64)
+            .split('')
+            .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+            .join('')
+        );
+        return JSON.parse(jsonPayload);
+      } catch (_) {
+        return null;
+      }
     },
 
     /**
@@ -271,6 +442,7 @@
       this.session = null;
       this.user = null;
       window.localStorage.removeItem('quest_user');
+      window.localStorage.removeItem('quest_active_session');
       this.updateUI();
       window.location.reload();
     },
