@@ -37,6 +37,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeEl
 
 from langgraph.graph import StateGraph, START, END
 
+from app.orchestration.instrumentation import instrument_node
+
 from agent import (
     get_llm,
     build_reader_agent,
@@ -120,12 +122,18 @@ class MultiAgentOrchestrator:
         approval_threshold: int = 8,
         output_dir: str = "reports",
         interactive: bool = False,
+        recorder: Any = None,
+        event_publisher: Any = None,
     ):
         self.provider = provider
         self.max_revisions = max_revisions
         self.approval_threshold = approval_threshold
         self.output_dir = output_dir
         self.interactive = interactive
+        # Optional execution-history recorder, supplied by the composition root.
+        self.recorder = recorder
+        # Optional distributed-event publisher, bound to this run by the worker.
+        self.event_publisher = event_publisher
 
         # Initialize LLM & Specialized Chains for this orchestrator instance
         self.llm = get_llm(provider=self.provider)
@@ -139,6 +147,15 @@ class MultiAgentOrchestrator:
         self.graph = self._build_graph()
 
     # ─── Graph Node Implementations ──────────────────────────────────────────
+
+    def _publish(self, event_type: str, payload: Dict[str, Any]) -> None:
+        if self.event_publisher is None:
+            return
+        try:
+            self.event_publisher.publish(event_type, payload)
+        except Exception:
+            # Event transport must never break research execution.
+            pass
 
     def intake_node(self, state: ResearchState) -> Dict[str, Any]:
         """Node 1: Strategist Agent - Validates and decomposes query into research plan."""
@@ -248,6 +265,13 @@ class MultiAgentOrchestrator:
         )
 
         formatted_search = orchestrator.format_results(unique_results)
+        self._publish(
+            "source.discovered",
+            {
+                "count": len(unique_results),
+                "sources": [result.model_dump() for result in unique_results[:5]],
+            },
+        )
 
         return {
             "search_results_raw": [r.model_dump() for r in unique_results],
@@ -443,14 +467,20 @@ class MultiAgentOrchestrator:
             f"DEEP PRIMARY SOURCES EXTRACT:\n{state.get('scraped_content', '')[:3500]}"
         )
 
-        drafted_report = self.writer_chain.invoke({
-            "topic": refined_query,
-            "research_type": research_type,
-            "focus_areas": focus_areas,
-            "source_summary": state.get("source_summary", "Multi-source web & academic corpus"),
-            "analysis": state.get("analysis", ""),
-            "research": combined_research,
-        })
+        # TD-RUNTIME-05 fix: writer_chain.invoke() can raise LLM provider errors;
+        # capture them so the pipeline can surface a clean error instead of crashing.
+        try:
+            drafted_report = self.writer_chain.invoke({
+                "topic": refined_query,
+                "research_type": research_type,
+                "focus_areas": focus_areas,
+                "source_summary": state.get("source_summary", "Multi-source web & academic corpus"),
+                "analysis": state.get("analysis", ""),
+                "research": combined_research,
+            })
+        except Exception as exc:
+            console.print(f"  [dim red]⚠ Writer agent failed: {exc}[/dim red]")
+            raise
 
         console.print(Panel("✅ Initial report draft completed", style="green"))
 
@@ -514,6 +544,16 @@ class MultiAgentOrchestrator:
         )
 
         console.print(Panel(feedback_summary, title=f"📋 Critic Audit (Iteration {state.get('revision_count', 0)})", style=score_color))
+
+        if not passed and state.get("revision_count", 0) < state.get("max_revisions", self.max_revisions):
+            self._publish(
+                "review.required",
+                {
+                    "critic_score": score,
+                    "approval_threshold": state.get("approval_threshold", self.approval_threshold),
+                    "revision_count": state.get("revision_count", 0),
+                },
+            )
 
         return {
             "critic_score": score,
@@ -684,6 +724,15 @@ class MultiAgentOrchestrator:
         export_log.append(
             f"Citations validated: {citations_verified}/{citations_total} live ({citations_pass_rate})"
         )
+        self._publish(
+            "report.generated",
+            {
+                "saved_report_path": str(filepath.resolve()),
+                "critic_score": score,
+                "citations_verified": citations_verified,
+                "citations_total": citations_total,
+            },
+        )
 
         return {
             "final_report": full_document,
@@ -718,16 +767,34 @@ class MultiAgentOrchestrator:
         """Constructs and compiles the full multi-agent StateGraph workflow."""
         builder = StateGraph(ResearchState)
 
-        # Add all agent nodes
-        builder.add_node("intake_node", self.intake_node)
-        builder.add_node("search_node", self.search_node)
-        builder.add_node("reader_node", self.reader_node)
-        builder.add_node("rag_node", self.rag_node)          # RAG: index + retrieve
-        builder.add_node("analyst_node", self.analyst_node)
-        builder.add_node("writer_node", self.writer_node)
-        builder.add_node("critic_node", self.critic_node)
-        builder.add_node("refiner_node", self.refiner_node)
-        builder.add_node("exporter_node", self.exporter_node)
+        # Add all agent nodes. Each is wrapped with stage instrumentation
+        # (structured start/finish/failure logs with duration); behaviour and
+        # the graph structure itself are unchanged.
+        builder.add_node(
+            "intake_node", instrument_node("intake", self.intake_node, self.recorder, self.event_publisher)
+        )
+        builder.add_node(
+            "search_node", instrument_node("search", self.search_node, self.recorder, self.event_publisher)
+        )
+        builder.add_node(
+            "reader_node", instrument_node("reader", self.reader_node, self.recorder, self.event_publisher)
+        )
+        builder.add_node("rag_node", instrument_node("rag", self.rag_node, self.recorder, self.event_publisher))
+        builder.add_node(
+            "analyst_node", instrument_node("analyst", self.analyst_node, self.recorder, self.event_publisher)
+        )
+        builder.add_node(
+            "writer_node", instrument_node("writer", self.writer_node, self.recorder, self.event_publisher)
+        )
+        builder.add_node(
+            "critic_node", instrument_node("critic", self.critic_node, self.recorder, self.event_publisher)
+        )
+        builder.add_node(
+            "refiner_node", instrument_node("refiner", self.refiner_node, self.recorder, self.event_publisher)
+        )
+        builder.add_node(
+            "exporter_node", instrument_node("exporter", self.exporter_node, self.recorder, self.event_publisher)
+        )
 
         # Flow edges
         builder.add_edge(START, "intake_node")

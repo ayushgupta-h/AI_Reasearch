@@ -17,21 +17,25 @@ wheels/
 *.env
 *.key
 backend/chroma.key
+apifile
 
-# ── Logs ──────────────────────────────────────
+# ── Logs & Coverage ───────────────────────────
 *.log
 backend.log
 frontend.log
+.coverage
+*.coverage
+coverage.json
+coverage-report.txt
+backend/.coverage
+backend/coverage.json
+backend/coverage-report.txt
 
 # ── Generated reports (keep folder, skip files)
-backend/reports/*.md
-backend/reports/*.docx
-backend/reports/*.pdf
-backend/reports/exports/
-backend/reports/reports/
-reports/*.md
-reports/*.docx
-reports/*.pdf
+backend/reports/*
+!backend/reports/.gitkeep
+reports/*
+!reports/.gitkeep
 
 # ── Databases ─────────────────────────────────
 backend/sessions.db

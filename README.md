@@ -93,6 +93,52 @@ python main.py --arch
 
 ---
 
+## 🔀 Respan Gateway (optional chat routing)
+
+The chat assistant can route through the open-source
+[Respan Gateway](https://github.com/respanai/respan-gateway?utm_source=freebuff&utm_medium=paid&utm_campaign=respan-gateway&bfcid=bfc_1.eyJpZCI6IjRlNTdkNzM4LTlhMjEtNDcxNi04ZWNkLTQyYTk1MjdiM2ExNSIsImMiOiIyMDM2ODZkZS1mMzg0LTQ4NTQtYmViNC1hYzBiYWRmNmM1NTUiLCJrIjoiM2IxMGE4YmUtNzgyOS00MmJhLWFmNmEtYmI0YWUxZTRhY2Y4IiwiaWF0IjoxNzk0MzM1NDY1fQ.zvcV1Wfk1nQY_auTLQMrjNz599YoR9kbFyx5Wneskh0)
+instead of calling each provider SDK directly. The gateway runs **in-process**
+(no extra port), speaks the OpenAI chat-completions API, and forwards each
+request to the provider named in the model — `groq/openai/gpt-oss-120b`,
+`gemini/gemini-3.8-flash`, ... — using the provider keys already in `.env`. No
+Respan account, hosted credits or tracing export are involved.
+
+Enable it in `backend/.env` (the pinned `respan-gateway==0.3.0` is already in
+`backend/requirements.txt`):
+
+```env
+GATEWAY_ENABLED=true
+# Optional; defaults to "<LLM_PROVIDER>/<that provider's model>".
+GATEWAY_MODEL=groq/openai/gpt-oss-120b
+# Optional gateway.toml with explicit providers/routes (see the guide above).
+GATEWAY_CONFIG=
+```
+
+Run the API as usual and call chat:
+
+```bash
+cd backend
+uvicorn app.main:app --reload --port 8000
+
+curl -s localhost:8000/chat -H "content-type: application/json" \
+  -d '{"message": "What is retrieval-augmented generation?"}'
+# {"reply": "...", "provider": "gateway"}
+```
+
+`POST /chat` tries the gateway first and falls back to the direct providers
+(`gemini`, `groq`, `mistral`, `huggingface`) if it fails, so nothing changes
+while `GATEWAY_ENABLED` is off.
+
+**Verified locally** by `pytest backend/tests/test_gateway_provider.py` and an
+end-to-end run of `uvicorn app.main:app` against a loopback OpenAI-compatible
+provider fixture: `POST /chat` answered
+`200 {"reply": "... (fixture reply)", "provider": "gateway"}` and the gateway
+forwarded the system + user messages to the routed fixture model. No live
+provider request was made here (no provider credentials in this environment);
+run the command above in your normal app environment to verify one.
+
+---
+
 ## 📦 Programmatic Python API
 
 ```python

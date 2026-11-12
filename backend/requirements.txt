@@ -13,6 +13,11 @@ langchain-google-genai
 google-genai
 
 # ==============================
+# Groq (default LLM provider)
+# ==============================
+langchain-groq
+
+# ==============================
 # Tavily Web Search
 # ==============================
 tavily-python
@@ -82,6 +87,7 @@ reportlab            # Plain-text PDF fallback (no system deps)
 # FastAPI REST Server
 # ==============================
 fastapi              # REST framework
+python-multipart     # multipart/form-data uploads
 uvicorn[standard]    # ASGI server (includes websockets + httptools)
 sse-starlette        # Server-Sent Events helper (optional, used by StreamingResponse)
 
@@ -93,8 +99,34 @@ langchain-chroma     # LangChain ↔ ChromaDB integration
 sentence-transformers # Local embedding model (all-MiniLM-L6-v2)
 
 # ==============================
+# Respan Gateway (in-process LLM routing)
+# ==============================
+respan-gateway==0.3.0 # https://github.com/respanai/respan-gateway
+
+# ==============================
 # Testing
 # ==============================
 pytest               # Test runner
 pytest-mock          # Mocker fixture (simplifies unittest.mock usage)
 pytest-asyncio       # Async test support (for IsolatedAsyncioTestCase)
+
+# ==============================
+# PostgreSQL (TASK 2.1)
+# ==============================
+psycopg[binary]     # Psycopg 3 driver (async + sync binary wheels)
+alembic              # Schema migration tooling
+
+# ==============================
+# Redis + Celery (TASK 2.2)
+# ==============================
+celery[redis]        # Durable background task execution (Redis broker)
+redis                # Redis client (broker/health-check)
+
+# ==============================
+# Production Observability (TASK 2.6)
+# ==============================
+prometheus-client>=0.20.0
+opentelemetry-api>=1.25.0
+opentelemetry-sdk>=1.25.0
+opentelemetry-exporter-otlp-proto-http>=1.25.0
+opentelemetry-exporter-otlp-proto-grpc>=1.25.0
