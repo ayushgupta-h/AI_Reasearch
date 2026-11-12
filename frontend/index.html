@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="refresh" content="0;url=dashboard.html">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <title>Quest — Redirecting</title>
 <style>
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0a0f;color:rgba(255,255,255,.45);font-family:system-ui,sans-serif;font-size:14px}
@@ -11,6 +13,11 @@
 </head>
 <body>
 <p>Redirecting&hellip;</p>
-<script>location.replace('dashboard.html')</script>
+<script>
+  // Preserve query string (e.g. ?code=... from OAuth) and hash fragment (e.g. #access_token=...)
+  var search = window.location.search || '';
+  var hash = window.location.hash || '';
+  window.location.replace('dashboard.html' + search + hash);
+</script>
 </body>
 </html>

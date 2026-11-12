@@ -166,6 +166,8 @@ class ResearchKnowledgeBase:
         topic: str,
         persist_dir: str = _DEFAULT_PERSIST_DIR,
         embeddings: Optional[Any] = None,
+        user_id: str = "",
+        project_id: str = "",
     ) -> None:
         self.topic = topic
         self.persist_dir = persist_dir
@@ -173,6 +175,10 @@ class ResearchKnowledgeBase:
         self._collection_name = self._make_collection_name(topic)
         self._vectorstore = None          # lazy-initialised
         self._indexed_count: int = 0
+        # Multi-tenant isolation (Task 2.4): owner identifiers are stamped on
+        # every chunk and enforced as mandatory filters on tenant-scoped queries.
+        self.user_id = user_id
+        self.project_id = project_id
 
     # ── Helpers ───────────────────────────────────────────────────
 
@@ -182,6 +188,32 @@ class ResearchKnowledgeBase:
         slug = re.sub(r"[^a-zA-Z0-9\-]", "-", topic.lower())[:55].strip("-")
         slug = re.sub(r"-{2,}", "-", slug)
         return f"rai-{slug}" if slug else "rai-default"
+
+    def _build_tenant_filter(
+        self, filter_meta: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Build a ChromaDB metadata filter that confines results to this tenant.
+
+        When a ``user_id`` (and optionally ``project_id``) is configured, the
+        returned filter always requires the record's ``user_id`` (and
+        ``project_id``) metadata to match. This prevents cross-user
+        similarity-search results even when collection names collide, and it
+        also excludes legacy records that carry no tenant metadata (they cannot
+        satisfy the equality predicates). When no tenant identity is known
+        (legacy anonymous pipeline) the caller's filter is returned unchanged.
+        """
+        clauses: List[Dict[str, Any]] = []
+        if self.user_id:
+            clauses.append({"user_id": {"$eq": self.user_id}})
+        if self.project_id:
+            clauses.append({"project_id": {"$eq": self.project_id}})
+        if clauses:
+            if filter_meta:
+                clauses.append(filter_meta)
+            if len(clauses) == 1:
+                return clauses[0]
+            return {"$and": clauses}
+        return filter_meta
 
     def _get_vectorstore(self):
         """Lazy-initialise the ChromaDB LangChain vectorstore.
@@ -253,6 +285,14 @@ class ResearchKnowledgeBase:
 
             self._vectorstore.similarity_search = _decrypting_similarity_search
 
+            # TD-RUNTIME-06 fix: seed _indexed_count from the collection's
+            # actual document count so retrieval k is not incorrectly capped at 1
+            # when re-opening a collection that was populated in a previous run.
+            try:
+                self._indexed_count = self._vectorstore._collection.count()
+            except Exception:
+                pass  # leave as 0 on any error; the pipeline will still work
+
         return self._vectorstore
 
     # ── Indexing ──────────────────────────────────────────────────
@@ -282,7 +322,7 @@ class ResearchKnowledgeBase:
             for j, chunk in enumerate(chunks):
                 cid = _make_doc_id(chunk, prefix=f"{source_label}-{i}-{j}")
                 all_chunks.append(chunk)
-                all_metas.append({**meta_base, "source_label": source_label, "chunk_index": j})
+                all_metas.append({**meta_base, "source_label": source_label, "chunk_index": j, "user_id": self.user_id, "project_id": self.project_id})
                 all_ids.append(cid)
 
         if not all_chunks:
@@ -395,8 +435,9 @@ class ResearchKnowledgeBase:
         vs = self._get_vectorstore()
         try:
             kwargs: Dict[str, Any] = {"k": min(k, max(self._indexed_count, 1))}
-            if filter_meta:
-                kwargs["filter"] = filter_meta
+            tenant_filter = self._build_tenant_filter(filter_meta)
+            if tenant_filter:
+                kwargs["filter"] = tenant_filter
             docs = vs.similarity_search(query, **kwargs)
             return [
                 {
@@ -473,7 +514,8 @@ class ResearchKnowledgeBase:
         """Delete all documents from the collection (non-destructive to disk schema)."""
         try:
             vs = self._get_vectorstore()
-            vs._collection.delete(where={"source_label": {"$ne": ""}})
+            where = self._build_tenant_filter({"source_label": {"$ne": ""}})
+            vs._collection.delete(where=where)
             self._indexed_count = 0
             console.print("  [dim yellow]⚠ Knowledge base collection cleared.[/dim yellow]")
         except Exception as exc:
