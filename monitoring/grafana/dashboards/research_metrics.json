@@ -1,0 +1,103 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Avg Research Duration (seconds)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(research_duration_seconds_bucket[5m])) by (le)) or vector(0)",
+          "legendFormat": "Avg Duration",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Avg Critic Score (1-10)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(research_critic_score_bucket[5m])) by (le)) or vector(0)",
+          "legendFormat": "Critic Score",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Avg Sources Discovered",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(research_sources_count_bucket[5m])) by (le)) or vector(0)",
+          "legendFormat": "Sources",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Avg Refinement Revisions",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(research_revision_count_bucket[5m])) by (le)) or vector(0)",
+          "legendFormat": "Revisions",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Claim Verification Status Distribution",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "sum(research_claims_verification_status_total) by (status)",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Critic Score Distribution",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "sum(rate(research_critic_score_bucket[15m])) by (le)",
+          "legendFormat": "<= {{le}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Report Generation & Export Latency (seconds)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(research_report_generation_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95 Report Export",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["research-ai", "research", "quality", "critic"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Research AI — Research & Quality Metrics",
+  "uid": "rai-research-metrics"
+}
+

@@ -11,6 +11,8 @@ Defines the specialized agent personas and reasoning chains for multi-agent rese
 """
 
 import os
+import time
+import logging
 from typing import Optional, List
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -25,21 +27,29 @@ from hf_provider import get_hf_llm, is_hf_available
 
 load_dotenv()
 
+from app.telemetry import TracedLLMCallbackHandler, get_metrics
 
-# ─── LLM Configuration ──────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+
+# ─── Provider Availability ───────────────────────────────────────────────────
+
+PROVIDER_ORDER = ["groq", "gemini", "mistral", "huggingface"]
 
 
-def get_llm(provider: Optional[str] = None, temperature: float = 0):
-    """
-    Get the configured LLM based on provider choice.
+def _provider_has_key(provider: str) -> bool:
+    if provider == "gemini":
+        return bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+    if provider == "groq":
+        return bool(os.getenv("GROQ_API_KEY"))
+    if provider == "mistral":
+        return bool(os.getenv("MISTRAL_API_KEY"))
+    if provider in ("huggingface", "hf"):
+        return bool(os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN"))
+    return False
 
-    Args:
-        provider: "gemini", "mistral", "groq" or "huggingface". If None, reads
-                  LLM_PROVIDER from .env (defaults to "gemini").
-        temperature: Model temperature (default 0 for deterministic outputs).
-    """
-    provider = (provider or os.getenv("LLM_PROVIDER", "gemini")).lower().strip()
 
+def _build_llm_for_provider(provider: str, temperature: float = 0):
+    cb = [TracedLLMCallbackHandler(default_provider=provider)]
     if provider in ("huggingface", "hf"):
         model_key = os.getenv("HF_MODEL", "mistral")
         return get_hf_llm(model_key)
@@ -48,25 +58,98 @@ def get_llm(provider: Optional[str] = None, temperature: float = 0):
         return ChatGroq(
             model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
             temperature=temperature,
+            callbacks=cb,
         )
     elif provider == "mistral":
         from langchain_mistralai import ChatMistralAI
         return ChatMistralAI(
             model=os.getenv("MISTRAL_MODEL", "mistral-small-latest"),
             temperature=temperature,
+            callbacks=cb,
         )
     else:
         return ChatGoogleGenerativeAI(
             model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
             google_api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
             temperature=temperature,
-            max_retries=0,
-            timeout=15,
+            max_retries=2,
+            timeout=30,
+            callbacks=cb,
         )
 
 
-# Default LLM
-llm = get_llm()
+def _is_retryable(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(m in text for m in (
+        "429", "rate limit", "rate_limit", "quota", "resource_exhausted",
+        "502", "503", "504", "overloaded", "temporarily unavailable",
+        "timeout", "timed out", "connection", "socket",
+    ))
+
+
+# ─── LLM Configuration ──────────────────────────────────────────────────────
+
+
+def get_llm(provider: Optional[str] = None, temperature: float = 0):
+    """
+    Get the configured LLM with retry and automatic provider fallback.
+
+    Tries the requested provider first (with up to 2 retries for transient
+    failures), then falls through other configured providers.
+    """
+    requested = (provider or os.getenv("LLM_PROVIDER", "groq")).lower().strip()
+
+    chain = [requested] + [p for p in PROVIDER_ORDER if p != requested]
+    chain = [p for p in chain if _provider_has_key(p)]
+    if not chain:
+        chain = ["gemini"]
+
+    last_exc = None
+    prev_provider = requested
+    for prov in chain:
+        if prov != prev_provider:
+            get_metrics().record_llm_fallback(
+                from_provider=prev_provider,
+                to_provider=prov,
+                reason="retryable_failure" if last_exc and _is_retryable(last_exc) else "provider_unavailable",
+            )
+        prev_provider = prov
+        for attempt in range(3):
+            try:
+                llm = _build_llm_for_provider(prov, temperature)
+                return llm
+            except Exception as exc:
+                last_exc = exc
+                get_metrics().record_llm_usage(
+                    provider=prov,
+                    model=None,
+                    duration_seconds=0.0,
+                    status="failed",
+                    error_code=type(exc).__name__,
+                )
+                if _is_retryable(exc) and attempt < 2:
+                    wait = 2 ** attempt
+                    logger.warning("Provider %s attempt %d failed (%s), retrying in %ds", prov, attempt + 1, exc, wait)
+                    time.sleep(wait)
+                    continue
+                logger.warning("Provider %s failed: %s — trying next", prov, exc)
+                break
+
+    raise RuntimeError(f"All LLM providers failed. Last error: {last_exc}") from last_exc
+
+
+# TD-RUNTIME-04 fix: removed module-level ``llm = get_llm()`` call.
+# LLM is now resolved lazily inside build_* functions so ``import agent``
+# succeeds without any API keys configured.
+_llm = None
+
+
+def _get_default_llm(temperature: float = 0):
+    """Return the process-wide default LLM (lazy singleton)."""
+    global _llm
+    if _llm is None:
+        _llm = get_llm(temperature=temperature)
+    return _llm
 
 
 # ─── Pydantic Models for Structured Agent Outputs ───────────────────────────
@@ -105,7 +188,7 @@ class CriticEvaluation(BaseModel):
 def build_search_agent(model=None):
     """Builds a tool-calling search agent with multi-source retrieval tools."""
     return create_agent(
-        model=model or llm,
+        model=model or _get_default_llm(),
         tools=[multi_source_search, web_search],
         system_prompt=(
             "You are a master research search agent. Your objective is to formulate "
@@ -121,7 +204,7 @@ def build_search_agent(model=None):
 def build_reader_agent(model=None):
     """Builds a tool-calling reader agent for scraping deep page content."""
     return create_agent(
-        model=model or llm,
+        model=model or _get_default_llm(),
         tools=[scrape_url],
         system_prompt=(
             "You are an expert content extraction agent. Your job is to scrape selected "
@@ -166,10 +249,10 @@ Provide a comprehensive, objective, and dense analytical synthesis.""")
 
 def build_analyst_chain(model=None):
     """Builds an analysis chain for synthesizing multi-source findings."""
-    return ANALYST_PROMPT | (model or llm) | StrOutputParser()
+    return ANALYST_PROMPT | (model or _get_default_llm()) | StrOutputParser()
 
 
-analyst_chain = build_analyst_chain()
+# TD-RUNTIME-04 fix: analyst_chain is now only built on demand via orchestrator.
 
 
 # ─── Agent 4: Writer Chain (Comprehensive Report Generator) ─────────────────
@@ -229,10 +312,10 @@ Formatting Guidelines:
 
 def build_writer_chain(model=None):
     """Builds a writer chain for drafting comprehensive reports."""
-    return WRITER_PROMPT | (model or llm) | StrOutputParser()
+    return WRITER_PROMPT | (model or _get_default_llm()) | StrOutputParser()
 
 
-writer_chain = build_writer_chain()
+# TD-RUNTIME-04 fix: writer_chain is now built on demand via orchestrator.
 
 
 # ─── Agent 5: Critic Chain (Reviewer & Quality Auditor) ──────────────────────
@@ -272,12 +355,12 @@ def build_critic_chain(model=None):
         CRITIC_PROMPT.partial(
             format_instructions=CRITIC_JSON_PARSER.get_format_instructions()
         )
-        | (model or llm)
+        | (model or _get_default_llm())
         | CRITIC_JSON_PARSER
     )
 
 
-critic_chain = build_critic_chain()
+# TD-RUNTIME-04 fix: critic_chain is now built on demand via orchestrator.
 
 
 # Backward-compatible text critic chain if needed
@@ -306,7 +389,7 @@ One line verdict:
 
 
 def build_critic_text_chain(model=None):
-    return CRITIC_TEXT_PROMPT | (model or llm) | StrOutputParser()
+    return CRITIC_TEXT_PROMPT | (model or _get_default_llm()) | StrOutputParser()
 
 
 # ─── Agent 6: Refiner Chain (Self-Correction & Revision) ─────────────────────
@@ -342,7 +425,7 @@ Instructions for Revision:
 
 def build_refiner_chain(model=None):
     """Builds a refiner chain for revising reports based on critic feedback."""
-    return REFINER_PROMPT | (model or llm) | StrOutputParser()
+    return REFINER_PROMPT | (model or _get_default_llm()) | StrOutputParser()
 
 
-refiner_chain = build_refiner_chain()
+# TD-RUNTIME-04 fix: refiner_chain is now built on demand via orchestrator.

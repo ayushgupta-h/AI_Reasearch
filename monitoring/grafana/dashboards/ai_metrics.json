@@ -1,0 +1,108 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Total Tokens Consumed",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(ai_token_usage_total{token_type=\"total\"}) or vector(0)",
+          "legendFormat": "Tokens",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Estimated LLM Cost ($ USD)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(ai_estimated_cost_usd_total) or vector(0)",
+          "legendFormat": "$ USD",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Provider Failures",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(ai_provider_failures_total) or vector(0)",
+          "legendFormat": "Failures",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Total Fallbacks",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(ai_fallback_total) or vector(0)",
+          "legendFormat": "Fallbacks",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Token Usage by Provider & Model",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "sum(rate(ai_token_usage_total{token_type=\"total\"}[5m])) by (provider, model)",
+          "legendFormat": "{{provider}} - {{model}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "LLM Invocations Latency (p50, p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(ai_llm_duration_seconds_bucket[5m])) by (le, provider))",
+          "legendFormat": "{{provider}} p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(ai_llm_duration_seconds_bucket[5m])) by (le, provider))",
+          "legendFormat": "{{provider}} p95",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "title": "Fallback Frequency by Provider Transition",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(ai_fallback_total[5m])) by (from_provider, to_provider)",
+          "legendFormat": "{{from_provider}} -> {{to_provider}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["research-ai", "llm", "tokens", "cost"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Research AI — LLM & Provider Telemetry",
+  "uid": "rai-ai-metrics"
+}
+
