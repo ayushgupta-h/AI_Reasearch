@@ -1,0 +1,108 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Celery Active Tasks",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(celery_active_tasks)",
+          "legendFormat": "Active Tasks",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Queue Depth",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(celery_queue_depth)",
+          "legendFormat": "Enqueued",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Total Failed Tasks",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(celery_failed_tasks_total) or vector(0)",
+          "legendFormat": "Failed",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Total Retries",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(celery_retry_count_total) or vector(0)",
+          "legendFormat": "Retries",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Worker Availability",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "celery_worker_availability",
+          "legendFormat": "{{worker_name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Celery Execution Duration (seconds)",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 16, "x": 8, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(celery_task_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50 duration",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(celery_task_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95 duration",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "title": "Failures by Exception Type",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "expr": "sum(rate(celery_failed_tasks_total[5m])) by (exception_type)",
+          "legendFormat": "{{exception_type}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["research-ai", "celery", "worker"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Research AI — Celery & Background Pipeline",
+  "uid": "rai-celery-pipeline"
+}
+
