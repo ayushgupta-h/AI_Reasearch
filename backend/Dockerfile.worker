@@ -1,0 +1,29 @@
+# Worker image for Research AI (TASK 2.2): runs the Celery worker that
+# executes the LangGraph research pipeline.
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# System deps for weasyprint/reportlab + lxml wheels.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libcairo2 \
+        libgdk-pixbuf-2.0-0 \
+        libffi-dev \
+        libxml2-dev \
+        libxslt1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+COPY . .
+
+# Celery is started by docker-compose via `python -m celery -A celery_app worker`.
+CMD ["python", "-m", "celery", "-A", "celery_app", "worker", "--loglevel=info", "--concurrency=4"]

@@ -1,0 +1,70 @@
+# Docker Compose for Research AI (TASK 2.2)
+# -----------------------------------------
+# Runs:
+#   * redis      - Celery broker + optional result backend
+#   * celery     - the research worker (executes the LangGraph pipeline)
+#   * api        - the FastAPI app (optional; uncomment the `api` service)
+#
+# Secrets (DATABASE_URL, REDIS_URL, SUPABASE_*, LLM keys) are NOT in this
+# file; they come from the environment / .env at runtime.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: research-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: research-celery
+    command: >
+      python -m celery -A celery_app worker
+      --loglevel=info --concurrency=4
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=${DATABASE_URL:-}
+    env_file:
+      - .env
+    volumes:
+      - ./reports:/app/reports
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # api:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: research-api
+  #   command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379/0
+  #     - CELERY_BROKER_URL=redis://redis:6379/0
+  #     - CELERY_RESULT_BACKEND=redis://redis:6379/0
+  #     - DATABASE_URL=${DATABASE_URL:-}
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+
+volumes:
+  redis-data:
