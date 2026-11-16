@@ -914,7 +914,12 @@ const NAV = [
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('rai-sidebar') === '1');
   const [mobileOpen, setMobileOpen] = useState(false);
+  const navigate = useNavigate();
   useEffect(() => { localStorage.setItem('rai-sidebar', collapsed ? '1' : '0'); }, [collapsed]);
+
+  const isVercelLocalhost = typeof window !== 'undefined' &&
+    window.location.hostname.includes('vercel.app') &&
+    (API_BASE.includes('localhost') || API_BASE.includes('127.0.0.1'));
 
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-[#080806] text-[#F4EBDD]">
@@ -928,6 +933,17 @@ export function AppShell() {
         </div>
       )}
       <div className="flex min-w-0 flex-1 flex-col">
+        {isVercelLocalhost && (
+          <div className="flex items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
+            <span className="flex items-center gap-2 truncate">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+              <span>Backend not connected: Running on Vercel but API points to localhost. Set your Render URL in Settings.</span>
+            </span>
+            <Button size="sm" variant="outline" className="h-6 text-[11px] shrink-0 border-amber-500/40 text-amber-200 hover:bg-amber-500/20" onClick={() => navigate('/app/settings')}>
+              Configure Render URL
+            </Button>
+          </div>
+        )}
         <div className="flex h-12 items-center gap-3 border-b border-[#302319] px-3 md:hidden">
           <button onClick={() => setMobileOpen(true)} className="rounded p-2 text-[#C0B19C]"><Menu className="h-5 w-5" /></button>
           <span className="font-serif text-sm font-semibold tracking-wide text-[#E9D6B6]">Quest</span>
@@ -2029,10 +2045,81 @@ export function SettingsPage() {
   const { user, signOut } = useAuth();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
+  const toast = useToast();
+  const [apiUrl, setApiUrl] = useState(() => localStorage.getItem('questApi') || API_BASE);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const handleSaveApi = async () => {
+    setTesting(true);
+    setTestResult(null);
+    const cleanUrl = apiUrl.trim().replace(/\/$/, '');
+    try {
+      const target = cleanUrl ? `${cleanUrl}/auth/config` : `${API_BASE}/auth/config`;
+      const res = await fetch(target, { method: 'GET' });
+      if (res.ok) {
+        if (cleanUrl) {
+          localStorage.setItem('questApi', cleanUrl);
+        } else {
+          localStorage.removeItem('questApi');
+        }
+        setTestResult({ ok: true, message: 'Backend connected successfully!' });
+        toast.push('Backend API URL saved and verified!', 'success');
+        setTimeout(() => window.location.reload(), 1000);
+      } else {
+        setTestResult({ ok: false, message: `Server responded with status ${res.status}` });
+        toast.push(`Failed to connect: HTTP ${res.status}`, 'error');
+      }
+    } catch (e: any) {
+      setTestResult({ ok: false, message: e?.message || 'Failed to reach server. Check CORS or URL.' });
+      toast.push('Cannot reach backend. Verify URL and Render deployment.', 'error');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleResetApi = () => {
+    localStorage.removeItem('questApi');
+    setApiUrl('http://127.0.0.1:8000');
+    toast.push('Reset to default API URL', 'info');
+    setTimeout(() => window.location.reload(), 800);
+  };
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 px-4 py-8">
       <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Settings</h1>
+
+      <section className="rounded-xl border border-[#453322] bg-[#10100E] p-5">
+        <h2 className="text-xs font-mono uppercase tracking-wider text-[#817463] mb-3">Backend API Server (Render)</h2>
+        <p className="text-xs text-[#C0B19C] mb-3">
+          Enter your Render backend URL (e.g. <code className="text-[#E9D6B6]">https://your-service.onrender.com</code>) so the Vercel frontend can connect to multi-agent pipelines and load recent investigations.
+        </p>
+        <div className="space-y-3">
+          <div>
+            <label className="text-[11px] font-mono text-[#817463] block mb-1">Backend Server URL</label>
+            <Input
+              value={apiUrl}
+              onChange={(e) => setApiUrl(e.target.value)}
+              placeholder="https://quest-xxxx.onrender.com"
+              className="font-mono text-xs"
+            />
+          </div>
+          {testResult && (
+            <div className={cn('p-2.5 rounded-lg text-xs flex items-center gap-2', testResult.ok ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30')}>
+              {testResult.ok ? <Check className="h-4 w-4 shrink-0" /> : <AlertTriangle className="h-4 w-4 shrink-0" />}
+              <span>{testResult.message}</span>
+            </div>
+          )}
+          <div className="flex gap-2 pt-1">
+            <Button variant="primary" size="sm" onClick={handleSaveApi} loading={testing}>
+              Save & Test Connection
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleResetApi} disabled={testing}>
+              Reset Default
+            </Button>
+          </div>
+        </div>
+      </section>
 
       <section className="rounded-xl border border-[#453322] bg-[#10100E] p-5">
         <h2 className="text-xs font-mono uppercase tracking-wider text-[#817463] mb-3">Identity & Security</h2>

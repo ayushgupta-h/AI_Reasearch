@@ -3,8 +3,13 @@
  * Synchronized with the FastAPI backend routers.
  */
 
+const winEnv = (typeof window !== 'undefined' ? (window as unknown as { __ENV__?: Record<string, string> }).__ENV__ : null) || {};
+
 export const API_BASE = (
   (typeof window !== 'undefined' ? localStorage.getItem('questApi') : null) ||
+  winEnv.API_BASE ||
+  winEnv.VITE_API_URL ||
+  winEnv.VITE_API_BASE ||
   (import.meta.env.VITE_API_URL as string | undefined) ||
   (import.meta.env.VITE_API_BASE as string | undefined) ||
   'http://127.0.0.1:8000'

@@ -96,16 +96,19 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.allowed_origins),
+        allow_origin_regex=r"^https:\/\/.*\.vercel\.app$" if settings.app_env != "test" else None,
         # Auth uses bearer tokens, never cookies; wildcard + credentials is
         # invalid per the CORS spec, so credentials stay off.
         allow_credentials=(
             settings.cors_allow_credentials and "*" not in settings.allowed_origins
         ),
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
             "Authorization",
             "Content-Type",
             "Accept",
+            "Last-Event-ID",
+            "Cache-Control",
             "X-Request-ID",
             "traceparent",
             "tracestate",
