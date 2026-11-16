@@ -27,7 +27,7 @@ from app.schemas.enums import (
 
 ResearchId = Annotated[
     str,
-    StringConstraints(pattern=r"^[a-f0-9]{32}$", min_length=32, max_length=32),
+    StringConstraints(pattern=r"^[a-zA-Z0-9_-]+$", min_length=1, max_length=128),
 ]
 SubQuery = Annotated[str, StringConstraints(min_length=3, max_length=300, strip_whitespace=True)]
 MetadataValue = Annotated[str, StringConstraints(max_length=200, strip_whitespace=True)]
@@ -50,6 +50,9 @@ class ResearchRequest(DomainSchema):
     )
     max_revisions: int = Field(2, ge=0, le=5)
     approval_threshold: int = Field(8, ge=1, le=10)
+    require_plan_approval: bool = Field(
+        False, description="Pause for human approval before executing the proposed plan."
+    )
     priority: ResearchPriority = ResearchPriority.NORMAL
     language: Annotated[
         str, StringConstraints(pattern=r"^[a-z]{2}(?:-[A-Z]{2})?$")

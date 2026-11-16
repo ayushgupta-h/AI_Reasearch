@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Header, Path, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
-from app.errors import BadRequestError
+from app.errors import BadRequestError, EventStreamUnavailableError
 from app.events import ResearchStreamService
 from app.schemas.errors import ApiError
 from app.schemas.requests import ChatRequest, ResearchRunRequest
@@ -85,7 +85,7 @@ async def run_research(
 async def stream_research_events(
     request: Request,
     research_id: str = Path(
-        ..., pattern=r"^[a-f0-9]{32}$", description="32-character lowercase hex research id."
+        ..., pattern=r"^[a-zA-Z0-9_-]+$", description="Research id."
     ),
     last_event_id: Optional[str] = Query(
         None, description="Sequence number to replay after (query fallback for EventSource)."
@@ -108,10 +108,28 @@ async def stream_research_events(
         raise BadRequestError("Last-Event-ID must be a non-negative sequence number.")
 
     user_id = str(current_user.get("user_id") or "")
-    # Validate configuration and ownership before Starlette starts the
-    # streaming response; otherwise failures would be delivered as a 200
-    # stream that closes early.
-    service.ensure_available()
+    try:
+        service.ensure_available()
+    except EventStreamUnavailableError:
+        # Redis isn't configured — yield a single SSE error event so the
+        # frontend gets a proper stream response instead of an HTTP error.
+        async def _unavailable_stream():
+            yield (
+                "event: error\n"
+                'data: {"event": "error", "message": '
+                '"Real-time progress stream is not available '
+                '(Redis event bus not configured).", '
+                '"data": {"error_code": "stream_unavailable"}}\n\n'
+            )
+        return StreamingResponse(
+            _unavailable_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
     service.authorize(research_id, user_id)
     return StreamingResponse(
         service.stream(

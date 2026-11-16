@@ -69,7 +69,7 @@ def _build_llm_for_provider(provider: str, temperature: float = 0):
         )
     else:
         return ChatGoogleGenerativeAI(
-            model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+            model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
             google_api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
             temperature=temperature,
             max_retries=2,

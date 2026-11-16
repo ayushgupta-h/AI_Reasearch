@@ -8,6 +8,7 @@ from pydantic import Field
 
 from app.schemas.base import OutputSchema, ShortText, UtcDatetime, utc_now
 from app.schemas.enums import HealthState
+from app.schemas.provider import ProviderStatus
 
 
 class ComponentCheck(OutputSchema):
@@ -32,3 +33,16 @@ class HealthStatus(OutputSchema):
     uptime_seconds: Optional[float] = Field(None, ge=0)
     timestamp: UtcDatetime = Field(default_factory=utc_now)
     checks: List[ComponentCheck] = Field(default_factory=list, max_length=20)
+
+
+class DependenciesResponse(OutputSchema):
+    """Full dependency report for ``GET /health/dependencies``.
+
+    Lists every configured component check plus the LLM provider statuses
+    (including availability, when it was actually probed).
+    """
+
+    status: HealthState = HealthState.OK
+    checks: List[ComponentCheck] = Field(default_factory=list, max_length=20)
+    providers: List[ProviderStatus] = Field(default_factory=list, max_length=20)
+    timestamp: UtcDatetime = Field(default_factory=utc_now)

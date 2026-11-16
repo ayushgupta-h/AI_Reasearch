@@ -1,0 +1,55 @@
+{
+  "description": "Provider-specific LLM pricing in USD per 1,000 tokens. Input/output rates are separated. Prices are operational configuration and can be updated without code changes.",
+  "providers": {
+    "groq": {
+      "input_per_1k": 0.00059,
+      "output_per_1k": 0.00079
+    },
+    "gemini": {
+      "input_per_1k": 0.00010,
+      "output_per_1k": 0.00040
+    },
+    "mistral": {
+      "input_per_1k": 0.00020,
+      "output_per_1k": 0.00020
+    },
+    "huggingface": {
+      "input_per_1k": 0.0,
+      "output_per_1k": 0.0
+    }
+  },
+  "models": {
+    "groq/llama-3.3-70b-versatile": {
+      "input_per_1k": 0.00059,
+      "output_per_1k": 0.00079
+    },
+    "groq/llama-3.1-8b-instant": {
+      "input_per_1k": 0.00005,
+      "output_per_1k": 0.00008
+    },
+    "groq/mixtral-8x7b-32768": {
+      "input_per_1k": 0.00024,
+      "output_per_1k": 0.00024
+    },
+    "gemini/gemini-2.0-flash": {
+      "input_per_1k": 0.00010,
+      "output_per_1k": 0.00040
+    },
+    "gemini/gemini-1.5-flash": {
+      "input_per_1k": 0.000075,
+      "output_per_1k": 0.00030
+    },
+    "gemini/gemini-1.5-pro": {
+      "input_per_1k": 0.00125,
+      "output_per_1k": 0.00500
+    },
+    "mistral/mistral-small-latest": {
+      "input_per_1k": 0.00020,
+      "output_per_1k": 0.00020
+    },
+    "mistral/mistral-large-latest": {
+      "input_per_1k": 0.00200,
+      "output_per_1k": 0.00600
+    }
+  }
+}

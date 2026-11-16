@@ -40,6 +40,7 @@ Usage::
 from __future__ import annotations
 
 import sys
+import json
 import sqlite3
 import uuid
 import datetime
@@ -83,7 +84,10 @@ CREATE TABLE IF NOT EXISTS research_sessions (
     citations_total     INTEGER DEFAULT 0,
     duration_seconds    REAL,
     notes               TEXT,
-    user_id             TEXT
+    user_id             TEXT,
+    sources_json        TEXT,
+    claims_json         TEXT,
+    report_content      TEXT
 );
 """
 
@@ -91,12 +95,32 @@ _INSERT_SESSION_SQL = """
 INSERT INTO research_sessions (
     session_id, topic, timestamp, provider, critic_score,
     revision_count, status, saved_report_path, docx_path, pdf_path,
-    citations_verified, citations_total, duration_seconds, notes, user_id
+    citations_verified, citations_total, duration_seconds, notes, user_id,
+    sources_json, claims_json, report_content
 ) VALUES (
     :session_id, :topic, :timestamp, :provider, :critic_score,
     :revision_count, :status, :saved_report_path, :docx_path, :pdf_path,
-    :citations_verified, :citations_total, :duration_seconds, :notes, :user_id
-);
+    :citations_verified, :citations_total, :duration_seconds, :notes, :user_id,
+    :sources_json, :claims_json, :report_content
+)
+ON CONFLICT(session_id) DO UPDATE SET
+    topic = excluded.topic,
+    timestamp = excluded.timestamp,
+    provider = excluded.provider,
+    critic_score = excluded.critic_score,
+    revision_count = excluded.revision_count,
+    status = excluded.status,
+    saved_report_path = excluded.saved_report_path,
+    docx_path = excluded.docx_path,
+    pdf_path = excluded.pdf_path,
+    citations_verified = excluded.citations_verified,
+    citations_total = excluded.citations_total,
+    duration_seconds = excluded.duration_seconds,
+    notes = excluded.notes,
+    user_id = excluded.user_id,
+    sources_json = excluded.sources_json,
+    claims_json = excluded.claims_json,
+    report_content = excluded.report_content;
 """
 
 _SELECT_ALL_SQL = """
@@ -154,10 +178,14 @@ class SessionManager:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.execute(_CREATE_TABLE_SQL)
-            # Automatic schema migration: ensure user_id column exists
+            # Automatic schema migration: ensure new columns exist
             cols = [col[1] for col in conn.execute("PRAGMA table_info(research_sessions)").fetchall()]
-            if "user_id" not in cols:
-                conn.execute("ALTER TABLE research_sessions ADD COLUMN user_id TEXT")
+            for col_name in ["user_id", "sources_json", "claims_json", "report_content"]:
+                if col_name not in cols:
+                    try:
+                        conn.execute(f"ALTER TABLE research_sessions ADD COLUMN {col_name} TEXT")
+                    except Exception:
+                        pass
 
     @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
@@ -183,23 +211,11 @@ class SessionManager:
         user_id: Optional[str] = None,
     ) -> str:
         """
-        Persist a completed pipeline run to the database.
-
-        Parameters
-        ----------
-        final_state      : dict  — The ``ResearchState`` dict returned by
-                                   ``MultiAgentOrchestrator.run()``.
-        duration_seconds : float — Wall-clock seconds the pipeline took.
-        notes            : str   — Optional free-text annotation.
-        user_id          : str   — Authenticated user's UUID.
-
-        Returns
-        -------
-        str — The new ``session_id`` (UUID4).
+        Persist a completed or in-progress pipeline run to the database.
         """
-        session_id = str(uuid.uuid4())
+        session_id = str(final_state.get("session_id") or "").strip() or str(uuid.uuid4())
         req_data = final_state.get("research_request") or {}
-        topic = req_data.get("refined_query") or final_state.get("topic", "Unknown")
+        topic = final_state.get("topic") or req_data.get("refined_query") or "Research Investigation"
 
         # Extract citation stats from logs if not directly in state
         citations_verified = int(final_state.get("citations_verified", 0))
@@ -228,6 +244,14 @@ class SessionManager:
                 if m:
                     pdf_path = m.group(1).strip()
 
+        # Serialize sources, claims, and report content
+        sources = final_state.get("search_results_raw") or final_state.get("sources") or []
+        claims = final_state.get("claims") or final_state.get("claim_verification_results") or []
+        report_content = str(final_state.get("report_content") or final_state.get("final_report") or final_state.get("report") or "")
+
+        sources_json = json.dumps(sources) if isinstance(sources, (list, dict)) else str(sources or "")
+        claims_json = json.dumps(claims) if isinstance(claims, (list, dict)) else str(claims or "")
+
         row = {
             "session_id": session_id,
             "topic": topic,
@@ -244,6 +268,9 @@ class SessionManager:
             "duration_seconds": round(duration_seconds, 1) if duration_seconds else None,
             "notes": notes,
             "user_id": user_id,
+            "sources_json": sources_json,
+            "claims_json": claims_json,
+            "report_content": report_content,
         }
 
         with self._connect() as conn:
@@ -274,6 +301,30 @@ class SessionManager:
         rec = dict(row)
         if user_id and rec.get("user_id") and rec.get("user_id") != user_id:
             return None
+
+        # Parse sources and claims JSON
+        if rec.get("sources_json"):
+            try:
+                rec["search_results_raw"] = rec["sources"] = json.loads(rec["sources_json"])
+            except Exception:
+                pass
+        if rec.get("claims_json"):
+            try:
+                rec["claims"] = rec["claim_verification_results"] = json.loads(rec["claims_json"])
+            except Exception:
+                pass
+
+        # Ensure report / content is populated
+        if rec.get("report_content"):
+            rec["content"] = rec["report"] = rec["final_report"] = rec["report_content"]
+        elif rec.get("saved_report_path"):
+            p = Path(rec["saved_report_path"])
+            if p.is_file():
+                try:
+                    rec["content"] = rec["report"] = rec["final_report"] = rec["report_content"] = p.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+
         return rec
 
     def delete_session(self, session_id: str, user_id: Optional[str] = None) -> bool:

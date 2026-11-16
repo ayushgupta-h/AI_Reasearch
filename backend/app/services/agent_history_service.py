@@ -173,6 +173,24 @@ class AgentHistoryService:
             ),
         )
 
+    def pause_run(
+        self,
+        research_id: str,
+        owner_id: Optional[str],
+        *,
+        status: str = "awaiting_plan_approval",
+    ) -> None:
+        """Record a human-review pause without treating it as a failure."""
+        if not owner_id:
+            return
+        self._repository.update_run_status(research_id, owner_id, status)
+        self._repository.record_event(
+            research_id=research_id,
+            owner_id=owner_id,
+            event_type="research_paused",
+            message=f"Research execution paused with status {status}.",
+        )
+
     def fail_run(
         self, research_id: str, owner_id: Optional[str], error: BaseException | str
     ) -> None:

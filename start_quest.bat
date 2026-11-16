@@ -12,17 +12,17 @@ start "Quest frontend" cmd /k "cd frontend && ..\.venv\Scripts\python.exe -m htt
 
 ping 127.0.0.1 -n 4 >nul
 if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" (
-    start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" http://127.0.0.1:8123/new.html
+    start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" http://127.0.0.1:8123/
 ) else if exist "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" (
-    start "" "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" http://127.0.0.1:8123/new.html
+    start "" "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" http://127.0.0.1:8123/
 ) else if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" (
-    start "" "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" http://127.0.0.1:8123/new.html
+    start "" "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" http://127.0.0.1:8123/
 ) else (
-    start "" http://127.0.0.1:8123/new.html
+    start "" http://127.0.0.1:8123/
 )
 
 echo.
 echo Quest is running:
-echo   Frontend : http://127.0.0.1:8123/new.html
+echo   Frontend : http://127.0.0.1:8123/
 echo   Backend  : http://127.0.0.1:8000/docs
 echo Close the two "Quest" windows (or run stop_quest.bat) to stop.

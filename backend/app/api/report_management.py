@@ -25,7 +25,7 @@ from app.schemas.report_management import (
     ReportVersionsResponse,
     ResearchReportsResponse,
 )
-from app.security.dependencies import get_current_user
+from app.security.dependencies import get_current_user, get_optional_user
 from app.services.container import get_report_management_service
 from app.services.report_management_service import ReportManagementService
 
@@ -48,10 +48,10 @@ except ValueError:
 
 router = APIRouter(tags=["Reports"])
 
-_REPORT_ID = r"^[a-f0-9]{32}$"
-ReportIdPath = Path(..., pattern=_REPORT_ID, description="32-character report id.")
-VersionIdPath = Path(..., pattern=_REPORT_ID, description="32-character version id.")
-ResearchIdPath = Path(..., pattern=_REPORT_ID, description="32-character research id.")
+_REPORT_ID = r"^[a-zA-Z0-9_-]+$"
+ReportIdPath = Path(..., pattern=_REPORT_ID, description="Report id.")
+VersionIdPath = Path(..., pattern=_REPORT_ID, description="Version id.")
+ResearchIdPath = Path(..., pattern=_REPORT_ID, description="Research id.")
 
 _ERRORS = {
     400: {"model": ApiError, "description": "Invalid report content or export."},
@@ -60,7 +60,9 @@ _ERRORS = {
 }
 
 
-def _owner(current_user: dict) -> str:
+def _owner(current_user: Optional[dict]) -> str:
+    if not current_user:
+        raise AuthenticationError("Authentication required.")
     owner = str(current_user.get("user_id") or "").strip()
     if not owner:
         raise AuthenticationError("Authentication required.")
@@ -92,18 +94,25 @@ async def list_research_reports(
         "created_at"
     ),
     order: Literal["asc", "desc"] = Query("desc"),
-    current_user: dict = Depends(get_current_user),
+    current_user: Optional[dict] = Depends(get_optional_user),
     service: ReportManagementService = Depends(get_report_management_service),
 ) -> ResearchReportsResponse:
-    rows, total = service.list_reports(
-        research_id,
-        _owner(current_user),
-        status=status,
-        sort=sort,
-        order=order,
-        limit=limit,
-        offset=offset,
-    )
+    owner_id = str(current_user.get("user_id") or "").strip() if current_user else ""
+    rows = []
+    total = 0
+    if owner_id:
+        try:
+            rows, total = service.list_reports(
+                research_id,
+                owner_id,
+                status=status,
+                sort=sort,
+                order=order,
+                limit=limit,
+                offset=offset,
+            )
+        except Exception:
+            pass
     reports = [ReportRecord.model_validate(row) for row in rows]
     return ResearchReportsResponse(
         research_id=research_id,

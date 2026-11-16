@@ -49,6 +49,12 @@ class User(Base, TimestampMixin):
     projects: Mapped[List["Project"]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
     )
+    memories: Mapped[List["ResearchMemory"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    notifications: Mapped[List["Notification"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<User id={self.id} email={self.email!r}>"
@@ -71,6 +77,9 @@ class Project(Base, TimestampMixin, SoftDeleteMixin):
 
     owner: Mapped["User"] = relationship(back_populates="projects")
     sessions: Mapped[List["ResearchSession"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    memories: Mapped[List["ResearchMemory"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
 
@@ -116,6 +125,18 @@ class ResearchSession(Base, TimestampMixin, SoftDeleteMixin):
     reports: Mapped[List["ResearchReport"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
+    review_audits: Mapped[List["ReviewAudit"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+    memories: Mapped[List["ResearchMemory"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+    objectives: Mapped[List["ResearchObjective"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+    evaluations: Mapped[List["ResearchCompletenessEvaluation"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
 
 
 class ResearchPlan(Base, TimestampMixin):
@@ -130,10 +151,22 @@ class ResearchPlan(Base, TimestampMixin):
     query: Mapped[str] = mapped_column(Text, nullable=False)
     token_budget: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     agent_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
+    # Human plan-review state. The reviewer identity is stored as text because
+    # Supabase subjects are not guaranteed to be UUID-shaped in every deployment.
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    review_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Full proposed plan (sub-queries, focus areas, source types, etc.) so a
+    # reviewer can inspect the actual work before execution starts. The
+    # projection columns above remain queryable for dashboards.
+    details_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     session: Mapped["ResearchSession"] = relationship(back_populates="plans")
     tasks: Mapped[List["ResearchTask"]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan"
+    )
+    review_audits: Mapped[List["ReviewAudit"]] = relationship(
         back_populates="plan", cascade="all, delete-orphan"
     )
 

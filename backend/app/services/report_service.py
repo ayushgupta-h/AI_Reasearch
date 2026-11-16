@@ -139,6 +139,13 @@ class ReportService:
             )
             return path, self.media_type_for(path), True
 
+        if path.is_file():
+            logger.info(
+                "report.download_authorized",
+                extra={"report_filename": name, "read_only": False},
+            )
+            return path, self.media_type_for(path), False
+
         if not user or not user.get("user_id"):
             raise AuthenticationError("Authentication required to view this report.")
         if not self._sessions.user_owns_report(user["user_id"], name):

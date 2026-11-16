@@ -39,15 +39,30 @@ from app.database.models.event import (  # noqa: E402,F401
 from app.database.models.report import (  # noqa: E402,F401
     ReportVersion,
     ResearchReport,
+    ReviewAudit,
     ReviewComment,
     ReviewRequest,
 )
 from app.database.models.research import (  # noqa: E402,F401
     ClaimEvidence,
+    ContradictionEvidence,
     ResearchClaim,
     ResearchContradiction,
     ResearchEvidence,
     ResearchSource,
+)
+from app.database.models.memory import (  # noqa: E402,F401
+    ResearchMemory,
+)
+from app.database.models.notifications import (  # noqa: E402,F401
+    Notification,
+)
+from app.database.models.completeness import (  # noqa: E402,F401
+    ResearchCompletenessEvaluation,
+    ResearchObjective,
+)
+from app.database.models.credibility import (  # noqa: E402,F401
+    SourceCredibilityEvaluation,
 )
 
 __all__ = [
@@ -55,20 +70,26 @@ __all__ = [
     "AuditLog",
     "Base",
     "ClaimEvidence",
+    "ContradictionEvidence",
     "ModelUsage",
     "OwnershipMixin",
     "Project",
     "ReportVersion",
     "ResearchClaim",
+    "ResearchCompletenessEvaluation",
     "ResearchContradiction",
-    "ResearchEventRecord",
     "ResearchEvidence",
+    "ResearchMemory",
+    "ResearchObjective",
     "ResearchPlan",
     "ResearchRunStatus",
     "ResearchReport",
     "ResearchSession",
     "ResearchSource",
     "ResearchTask",
+    "SourceCredibilityEvaluation",
+    "Notification",
+    "ReviewAudit",
     "ReviewComment",
     "ReviewRequest",
     "SoftDeleteMixin",

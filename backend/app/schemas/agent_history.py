@@ -11,10 +11,10 @@ from app.schemas.common import PaginationMeta
 from app.schemas.enums import AgentExecutionStatus, SessionStatus, TimelineEventType
 
 ExecutionId = Annotated[
-    str, StringConstraints(pattern=r"^[a-f0-9]{32}$", min_length=32, max_length=32)
+    str, StringConstraints(pattern=r"^[a-zA-Z0-9_-]+$", min_length=1, max_length=128)
 ]
 ResearchId = Annotated[
-    str, StringConstraints(pattern=r"^[a-f0-9]{32}$", min_length=32, max_length=32)
+    str, StringConstraints(pattern=r"^[a-zA-Z0-9_-]+$", min_length=1, max_length=128)
 ]
 AgentNameText = Annotated[
     str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$", min_length=1, max_length=64)

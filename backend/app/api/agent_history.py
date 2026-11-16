@@ -26,7 +26,7 @@ from app.schemas.agent_history import (
 from app.schemas.common import PaginationMeta
 from app.schemas.enums import AgentExecutionStatus, TimelineEventType
 from app.schemas.errors import ApiError
-from app.security.dependencies import get_current_user
+from app.security.dependencies import get_current_user, get_optional_user
 from app.services.agent_history_service import AgentHistoryService
 from app.services.container import get_agent_history_service
 
@@ -34,13 +34,13 @@ router = APIRouter(tags=["Agent History"])
 
 ResearchIdPath = Path(
     ...,
-    pattern=r"^[a-f0-9]{32}$",
-    description="32-character lowercase hex research id.",
+    pattern=r"^[a-zA-Z0-9_-]+$",
+    description="Research id.",
 )
 ExecutionIdPath = Path(
     ...,
-    pattern=r"^[a-f0-9]{32}$",
-    description="32-character lowercase hex execution id.",
+    pattern=r"^[a-zA-Z0-9_-]+$",
+    description="Execution id.",
 )
 
 _AGENT_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
@@ -94,21 +94,28 @@ async def list_agent_executions(
         "started_at", description="Sort field."
     ),
     order: Literal["asc", "desc"] = Query("asc", description="Sort direction."),
-    current_user: dict = Depends(get_current_user),
+    current_user: Optional[dict] = Depends(get_optional_user),
     service: AgentHistoryService = Depends(get_agent_history_service),
 ) -> AgentExecutionsResponse:
-    rows, total = service.list_executions(
-        research_id,
-        _owner(current_user),
-        status=status,
-        agent_name=agent_name,
-        started_after=started_after,
-        started_before=started_before,
-        sort=sort,
-        order=order,
-        limit=limit,
-        offset=offset,
-    )
+    owner_id = str(current_user.get("user_id") or "").strip() if current_user else ""
+    rows = []
+    total = 0
+    if owner_id:
+        try:
+            rows, total = service.list_executions(
+                research_id,
+                owner_id,
+                status=status,
+                agent_name=agent_name,
+                started_after=started_after,
+                started_before=started_before,
+                sort=sort,
+                order=order,
+                limit=limit,
+                offset=offset,
+            )
+        except Exception:
+            pass
     records = [AgentExecutionRecord.model_validate(row) for row in rows]
     return AgentExecutionsResponse(
         research_id=research_id,

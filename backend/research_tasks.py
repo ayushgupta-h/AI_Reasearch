@@ -44,6 +44,7 @@ from app.events import (
 )
 from app.infrastructure.ports import ResearchExecutionRequest
 from app.infrastructure.research_executor import LocalResearchExecutor
+from app.orchestration.pipeline import build_checkpointer
 from app.observability import get_logger, redact
 from app.services.agent_history_service import AgentHistoryService
 from app.services.container import ServiceContainer
@@ -86,6 +87,7 @@ class ResearchTask:
         container: Optional[ServiceContainer] = None,
         executor: Optional[LocalResearchExecutor] = None,
         event_journal: Optional[EventJournal] = None,
+        require_plan_approval: bool = False,
     ) -> None:
         self.research_id = research_id
         self.user_id = user_id
@@ -94,6 +96,7 @@ class ResearchTask:
         self.max_revisions = max_revisions
         self.approval_threshold = approval_threshold
         self.output_dir = output_dir
+        self.require_plan_approval = require_plan_approval
         self._container = container or ServiceContainer(get_settings())
         self._journal = event_journal or build_event_journal(self._container.settings)
         self._events = BoundEventPublisher(
@@ -104,6 +107,13 @@ class ResearchTask:
         self._executor = executor or LocalResearchExecutor(
             recorder_factory=self._container.agent_history.recorder_for,
             event_publisher=self._events,
+            credibility_service=self._container.source_credibility_service,
+            credibility_repository=self._container.source_credibility_repository,
+            contradiction_service=self._container.contradiction_service,
+            contradiction_repository=self._container.contradiction_repository,
+            claim_repository=self._container.claim_repository,
+            review_repository=self._container.review_repository,
+            checkpointer=build_checkpointer(self._container.settings),
         )
 
     def _publish(
@@ -225,6 +235,7 @@ class ResearchTask:
             approval_threshold=self.approval_threshold,
             output_dir=self.output_dir,
             research_id=self.research_id,
+            require_plan_approval=self.require_plan_approval,
         )
 
         try:
@@ -243,6 +254,18 @@ class ResearchTask:
 
         status = state.get("status", "")
         duration = round(time.perf_counter() - started, 1)
+        if status in (
+            "awaiting_plan_approval",
+            "awaiting_human_approval",
+            "changes_requested",
+            "rejected",
+        ):
+            # Human review pauses are successful workflow outcomes. The plan
+            # reviewer resumes the same checkpoint through the review API; do
+            # not mark the run failed or register a report yet.
+            self._set_status(status)
+            self._publish_outcome(state, duration=duration)
+            return self._metadata(state)
         if status in ("completed", "cancelled"):
             self._finalize(state, started)
             self._publish_outcome(state, duration=duration)
@@ -265,7 +288,10 @@ class ResearchTask:
     def _publish_outcome(self, state: Mapping[str, Any], duration: float = 0.0) -> None:
         """Publish the business milestones that are available in final state."""
         status = str(state.get("status", "completed"))
-        self._set_status("completed" if status == "completed" else "cancelled")
+        if status in ("completed", "cancelled"):
+            self._set_status("completed" if status == "completed" else "cancelled")
+        else:
+            self._set_status(status)
         sources_count = len(state.get("search_results_raw", []))
         critic_score = state.get("critic_score")
         revision_count = state.get("revision_count", 0)
@@ -386,6 +412,7 @@ class ResearchTaskProducer:
         max_revisions: Optional[int] = None,
         approval_threshold: Optional[int] = None,
         output_dir: Optional[str] = None,
+        require_plan_approval: bool = False,
     ) -> Dict[str, str]:
         """Dispatch a research run. The *research_id* becomes the task id, so
         a duplicate ``submit`` for the same id either lands on the same task
@@ -403,6 +430,7 @@ class ResearchTaskProducer:
             ),
             "output_dir": output_dir
             or str(get_settings().reports_dir),
+            "require_plan_approval": require_plan_approval,
         }
         owner = user_id or "anonymous"
         self._journal.set_run_status(research_id, owner, "queued")
@@ -463,6 +491,7 @@ def _build_task():
         max_revisions: int,
         approval_threshold: int,
         output_dir: str,
+        require_plan_approval: bool = False,
     ) -> Mapping[str, Any]:
         worker = ResearchTask(
             research_id=research_id,
@@ -472,6 +501,7 @@ def _build_task():
             max_revisions=max_revisions,
             approval_threshold=approval_threshold,
             output_dir=output_dir,
+            require_plan_approval=require_plan_approval,
         )
         task_name = "research.run"
         worker_name = getattr(self.request, "hostname", "default")

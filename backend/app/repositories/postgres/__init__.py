@@ -14,13 +14,14 @@ from __future__ import annotations
 from app.repositories.postgres.base import PostgresRepository
 
 from app.database.models.domain import Project, ResearchSession, User
-from app.database.models.report import ResearchReport, ReviewRequest
+from app.database.models.report import ResearchReport, ReviewAudit, ReviewRequest
 
 __all__ = [
     "PostgresRepository",
     "Project",
     "ResearchReport",
     "ResearchSession",
+    "ReviewAudit",
     "ReviewRequest",
     "User",
 ]

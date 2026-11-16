@@ -192,13 +192,23 @@ class ResearchService:
                                 approval_threshold=request.approval_threshold,
                                 output_dir=str(request.output_dir),
                                 research_id=research_id,
+                                require_plan_approval=bool(
+                                    getattr(request, "require_plan_approval", False)
+                                ),
                             ),
                             user_id=user_id,
                         )
                     )
 
                     status = candidate.get("status", "")
-                    if status in ("completed", "cancelled"):
+                    if status in (
+                        "completed",
+                        "cancelled",
+                        "awaiting_plan_approval",
+                        "awaiting_human_approval",
+                        "changes_requested",
+                        "rejected",
+                    ):
                         final_state = candidate
                         used_provider = provider
                         break
@@ -220,6 +230,8 @@ class ResearchService:
             )
 
         if not cancel_event.is_set():
+            final_state["session_id"] = research_id
+            final_state["topic"] = request.topic
             self._persist(
                 final_state=final_state,
                 user_id=user_id,
@@ -251,6 +263,10 @@ class ResearchService:
             },
         )
 
+        report_content = final_state.get("final_report") or final_state.get("report") or final_state.get("report_content", "")
+        sources_analyzed = final_state.get("search_results_raw") or final_state.get("sources", [])
+        claims_list = final_state.get("claims") or final_state.get("claim_verification_results", [])
+
         event_queue.put((
             "complete",
             {
@@ -259,9 +275,13 @@ class ResearchService:
                 "critic_score": final_state.get("critic_score"),
                 "revision_count": final_state.get("revision_count", 0),
                 "saved_report_path": final_state.get("saved_report_path", ""),
-                "sources_analyzed": len(final_state.get("search_results_raw", [])),
+                "sources_analyzed": len(sources_analyzed),
                 "logs": final_state.get("logs", []),
                 "research_id": research_id,
+                "report": report_content,
+                "final_report": report_content,
+                "sources": sources_analyzed,
+                "claims": claims_list,
             },
         ))
         self._mark_completed(
@@ -297,8 +317,22 @@ class ResearchService:
         """Stream pipeline progress for one HTTP request."""
         event_queue: "queue.Queue" = queue.Queue()
         loop = asyncio.get_running_loop()
-        research_id = new_research_id()
+        research_id = (request.research_id if getattr(request, "research_id", None) else None) or new_research_id()
         cancel_event = threading.Event()
+
+        # Immediately record session in SQLite so sidebar and session queries see it
+        try:
+            self._sessions.save_session(
+                {
+                    "session_id": research_id,
+                    "topic": request.topic,
+                    "status": "running",
+                    "provider": request.provider,
+                },
+                user_id=user_id,
+            )
+        except Exception:
+            pass
 
         logger.info(
             "research.started",
@@ -403,11 +437,21 @@ class ResearchService:
         if self._history is None:
             return
         try:
-            self._history.complete_run(
-                research_id,
-                user_id,
-                status="completed" if status == "completed" else "cancelled",
-            )
+            if status in (
+                "awaiting_plan_approval",
+                "awaiting_human_approval",
+                "changes_requested",
+                "rejected",
+            ):
+                self._history.pause_run(
+                    research_id, user_id, status=status
+                )
+            else:
+                self._history.complete_run(
+                    research_id,
+                    user_id,
+                    status="completed" if status == "completed" else "cancelled",
+                )
         except Exception:  # telemetry must never affect the response
             logger.exception("research.history_complete_failed")
 

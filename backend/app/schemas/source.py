@@ -28,9 +28,25 @@ class ResearchSource(OutputSchema):
     )
     source_type: SourceType = SourceType.WEB
     snippet: Optional[MediumText] = None
+    publisher: Optional[ShortText] = None
+    author: Optional[ShortText] = None
+    venue: Optional[ShortText] = None
+    methodology: Optional[MediumText] = None
+    peer_reviewed: Optional[bool] = Field(
+        None,
+        description="True only when peer review is explicitly verified; null means unknown.",
+    )
+    references_available: Optional[bool] = Field(
+        None, description="Whether supporting references are explicitly reported."
+    )
+    source_nature: Optional[ShortText] = Field(
+        None, description="primary, secondary, review, etc."
+    )
     published_at: Optional[UtcDatetime] = None
     retrieved_at: UtcDatetime = Field(default_factory=utc_now)
     credibility_score: Optional[float] = Field(None, ge=0, le=1)
+    credibility_confidence: Optional[float] = Field(None, ge=0, le=1)
+    credibility_label: Optional[ShortText] = None
     language: LanguageCode = "en"
     metadata: Dict[MetadataKey, MetadataValue] = Field(default_factory=dict, max_length=20)
 

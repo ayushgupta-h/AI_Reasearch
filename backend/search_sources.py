@@ -16,7 +16,7 @@ query intake system and deduplicated by URL.
 
 from abc import ABC, abstractmethod
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Any, Optional
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import re
@@ -43,6 +43,20 @@ class SearchResult(BaseModel):
     snippet: str = Field(description="Text snippet / summary")
     source_name: str = Field(description="Name of the source (e.g. 'arXiv')")
     source_type: str = Field(description="Category (e.g. 'academic', 'web')")
+
+    # Optional metadata. A value is populated only when the provider actually
+    # supplies it; the evaluator must never invent missing fields.
+    source_id: Optional[str] = Field(default=None, description="Existing source record ID, if known")
+    publisher: Optional[str] = Field(default=None, description="Publisher or website name")
+    authors: list[str] = Field(default_factory=list, description="Named authors/creators")
+    publication_date: Optional[str] = Field(default=None, description="ISO date or year supplied by the provider")
+    doi: Optional[str] = Field(default=None, description="DOI supplied by the provider")
+    venue: Optional[str] = Field(default=None, description="Publication venue, when supplied")
+    methodology: Optional[str] = Field(default=None, description="Methodology description, when supplied")
+    peer_reviewed: Optional[bool] = Field(default=None, description="True only when peer review is explicitly verified")
+    references_available: Optional[bool] = Field(default=None, description="Whether supporting references are explicitly reported")
+    source_nature: Optional[str] = Field(default=None, description="primary, secondary, review, etc.")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional provider metadata")
 
 
 # ─── Abstract Base ───────────────────────────────────────────────────────────
@@ -88,6 +102,10 @@ class TavilySearch(BaseSearchSource):
                     snippet=r.get("content", "")[:500],
                     source_name=self.name,
                     source_type=self.source_type,
+                    publisher=r.get("publisher") or None,
+                    authors=[r["author"]] if r.get("author") else [],
+                    publication_date=r.get("published_date") or None,
+                    doi=r.get("doi") or None,
                 )
                 for r in data.get("results", [])
             ]
@@ -129,12 +147,26 @@ class ArxivSearch(BaseSearchSource):
                 snippet = (summary_el.text or "").strip().replace("\n", " ")[:500] if summary_el is not None else ""
                 url = (id_el.text or "").strip() if id_el is not None else ""
 
+                authors = [
+                    (author_el.findtext("atom:name", default="", namespaces=ns) or "").strip()
+                    for author_el in entry.findall("atom:author", ns)
+                ]
+                authors = [name for name in authors if name]
+                published_el = entry.find("atom:published", ns)
+                doi_el = entry.find("{http://arxiv.org/schemas/atom}doi")
+                journal_ref_el = entry.find("{http://arxiv.org/schemas/atom}journal_ref")
+
                 results.append(SearchResult(
                     title=title,
                     url=url,
                     snippet=snippet,
                     source_name=self.name,
                     source_type=self.source_type,
+                    publisher="arXiv",
+                    authors=authors,
+                    publication_date=(published_el.text or "")[:10] if published_el is not None else None,
+                    doi=(doi_el.text or "").strip() if doi_el is not None else None,
+                    venue=((journal_ref_el.text or "").strip() if journal_ref_el is not None else "") or "arXiv",
                 ))
 
             return results
@@ -181,6 +213,7 @@ class WikipediaSearch(BaseSearchSource):
                     snippet=clean_snippet[:500],
                     source_name=self.name,
                     source_type=self.source_type,
+                    publisher="Wikipedia",
                 ))
 
             return results
@@ -250,6 +283,9 @@ class NewsAPISearch(BaseSearchSource):
                     snippet=(a.get("description") or "")[:500],
                     source_name=self.name,
                     source_type=self.source_type,
+                    publisher=(a.get("source") or {}).get("name") if isinstance(a.get("source"), dict) else None,
+                    authors=[a["author"]] if a.get("author") else [],
+                    publication_date=a.get("publishedAt") or None,
                 )
                 for a in data.get("articles", [])
             ]
@@ -291,6 +327,17 @@ class GoogleScholarSearch(BaseSearchSource):
                     snippet=r.get("snippet", "")[:500],
                     source_name=self.name,
                     source_type=self.source_type,
+                    venue=(r.get("publication_info") or {}).get("summary") if isinstance(r.get("publication_info"), dict) else None,
+                    authors=[
+                        author.get("name")
+                        for author in (r.get("publication_info") or {}).get("authors", [])
+                        if isinstance(author, dict) and author.get("name")
+                    ] if isinstance(r.get("publication_info"), dict) else [],
+                    publication_date=(
+                        str(r.get("publication_info", {}).get("year"))
+                        if isinstance(r.get("publication_info"), dict) and r.get("publication_info", {}).get("year")
+                        else None
+                    ),
                 )
                 for r in data.get("organic_results", [])
             ]
@@ -334,12 +381,24 @@ class HuggingFaceSearch(BaseSearchSource):
                         summary = paper.get("summary", "")[:500]
                         url = f"https://huggingface.co/papers/{paper_id}" if paper_id else ""
 
+                        authors = []
+                        for author in paper.get("authors", []) or []:
+                            if isinstance(author, dict):
+                                name = author.get("name") or author.get("fullname")
+                            else:
+                                name = str(author)
+                            if name:
+                                authors.append(str(name))
+
                         results.append(SearchResult(
                             title=title,
                             url=url,
                             snippet=summary,
                             source_name=self.name,
                             source_type=self.source_type,
+                            publisher="Hugging Face",
+                            authors=authors,
+                            publication_date=paper.get("publishedAt") or None,
                         ))
 
             # ── Fallback: search HF models for research context ──
@@ -619,11 +678,35 @@ class SearchOrchestrator:
 
         parts: list[str] = []
         for i, r in enumerate(results, 1):
+            details = []
+            if r.publisher:
+                details.append(f"Publisher/website: {r.publisher}")
+            if r.authors:
+                details.append(f"Authors: {', '.join(r.authors)}")
+            if r.publication_date:
+                details.append(f"Publication date: {r.publication_date}")
+            if r.venue:
+                details.append(f"Venue: {r.venue}")
+            if r.doi:
+                details.append(f"DOI: {r.doi}")
+            if r.methodology:
+                details.append(f"Methodology: {r.methodology}")
+            if r.peer_reviewed is not None:
+                details.append(
+                    "Peer reviewed: " + ("yes (verified in metadata)" if r.peer_reviewed else "no")
+                )
+            if r.references_available is not None:
+                details.append(
+                    "Supporting references: "
+                    + ("reported available" if r.references_available else "reported unavailable")
+                )
+            metadata = "\n".join(details)
             parts.append(
                 f"[{i}] ({r.source_name} — {r.source_type})\n"
                 f"Title: {r.title}\n"
                 f"URL: {r.url}\n"
                 f"Snippet: {r.snippet}"
+                + (f"\n{metadata}" if metadata else "")
             )
         return "\n\n-----\n\n".join(parts)
 

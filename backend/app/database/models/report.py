@@ -13,10 +13,10 @@ A ``ReviewRequest`` links a reviewer to a report; the reviewer's decision
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.models.base import (
@@ -49,6 +49,9 @@ class ResearchReport(Base, TimestampMixin, SoftDeleteMixin):
         back_populates="report", cascade="all, delete-orphan"
     )
     review_requests: Mapped[List["ReviewRequest"]] = relationship(
+        back_populates="report", cascade="all, delete-orphan"
+    )
+    review_audits: Mapped[List["ReviewAudit"]] = relationship(
         back_populates="report", cascade="all, delete-orphan"
     )
 
@@ -87,8 +90,9 @@ class ReviewRequest(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     status: Mapped[str] = mapped_column(
-        String(20), default="pending", nullable=False
+        String(30), default="pending_review", nullable=False
     )
+    previous_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     decision: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     decided_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     reviewer_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -111,14 +115,51 @@ class ReviewComment(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(30), default="general", nullable=False)
+    claim_ids_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_resolved: Mapped[bool] = mapped_column(default=False, nullable=False)
 
     review_request: Mapped["ReviewRequest"] = relationship(back_populates="comments")
 
 
+class ReviewAudit(Base):
+    """Append-only human review audit entry for plans and reports.
+
+    ``reviewer_id`` is stored as text rather than a user foreign key because
+    authentication subjects are deployment-specific. The session, plan and
+    report links remain real foreign keys so audit rows cannot escape their
+    research scope.
+    """
+
+    __tablename__ = "review_audits"
+    __table_args__ = (
+        Index("ix_review_audit_session", "session_id", "created_at"),
+        Index("ix_review_audit_report", "report_id", "created_at"),
+        Index("ix_review_audit_plan", "plan_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = pk_uuid()
+    session_id: Mapped[uuid.UUID] = fk_uuid("research_sessions")
+    plan_id: Mapped[Optional[uuid.UUID]] = fk_uuid("research_plans", nullable=True)
+    report_id: Mapped[Optional[uuid.UUID]] = fk_uuid("research_reports", nullable=True)
+    reviewer_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    previous_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    new_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+    session: Mapped["ResearchSession"] = relationship(back_populates="review_audits")
+    plan: Mapped[Optional["ResearchPlan"]] = relationship(back_populates="review_audits")
+    report: Mapped[Optional["ResearchReport"]] = relationship(back_populates="review_audits")
+
+
 __all__ = [
     "ReportVersion",
     "ResearchReport",
+    "ReviewAudit",
     "ReviewComment",
     "ReviewRequest",
 ]

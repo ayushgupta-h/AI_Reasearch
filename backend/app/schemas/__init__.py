@@ -31,7 +31,13 @@ from app.schemas.base import (
     utc_now,
 )
 from app.schemas.citation import Citation
-from app.schemas.claim import Claim, Contradiction, Evidence
+from app.schemas.claim import (
+    Claim,
+    Contradiction,
+    ContradictionAnalysis,
+    ContradictionDifference,
+    Evidence,
+)
 from app.schemas.common import (
     ApiResponse,
     Page,
@@ -48,6 +54,7 @@ from app.schemas.enums import (
     ClaimStatus,
     DocumentProcessingStatus,
     ClaimType,
+    ContradictionCategory,
     ContradictionSeverity,
     ContradictionStatus,
     ErrorCode,
@@ -61,6 +68,9 @@ from app.schemas.enums import (
     ReportStatus,
     ReportVerificationStatus,
     ReportVersionStatus,
+    ReviewAction,
+    ReviewCommentKind,
+    ReviewStatus,
     ResearchEventType,
     ResearchPriority,
     ResearchTerminalStatus,
@@ -81,6 +91,20 @@ from app.schemas.errors import ApiError
 from app.schemas.health import ComponentCheck, HealthStatus
 from app.schemas.project import Project
 from app.schemas.provider import ProviderStatus
+from app.schemas.review import (
+    PlanModificationRequest,
+    PlanReviewDecisionRequest,
+    PlanReviewResponse,
+    ReportReviewDecisionRequest,
+    ReportReviewRecord,
+    ReportReviewResponse,
+    ReportRevisionRequest,
+    ResearchPlanReviewRecord,
+    ReviewAuditRecord,
+    ReviewCommentRecord,
+    ReviewCommentRequest,
+    ReviewHistoryResponse,
+)
 from app.schemas.report import (
     FileUploadMetadata,
     ReportVersion,
@@ -135,6 +159,12 @@ from app.schemas.responses import (
 )
 from app.schemas.session import ResearchSession
 from app.schemas.source import ResearchSource
+from app.schemas.source_credibility import (
+    CredibilityFactor,
+    CredibilityFactorStatus,
+    CredibilityLabel,
+    SourceCredibilityEvaluation,
+)
 from app.schemas.task import ResearchTask
 
 _PIPELINE_EXPORTS = ("CriticEvaluation", "QueryPlan", "QueryValidation")
@@ -148,6 +178,8 @@ __all__ = [
     "Claim",
     "ComponentCheck",
     "Contradiction",
+    "ContradictionAnalysis",
+    "ContradictionDifference",
     "DeletedDocumentResponse",
     "DocumentListResponse",
     "DocumentRecord",
@@ -165,6 +197,18 @@ __all__ = [
     "ReportVersionSummary",
     "ReportVersionsResponse",
     "ResearchApproval",
+    "PlanModificationRequest",
+    "PlanReviewDecisionRequest",
+    "PlanReviewResponse",
+    "ReportReviewDecisionRequest",
+    "ReportReviewRecord",
+    "ReportReviewResponse",
+    "ReportRevisionRequest",
+    "ResearchPlanReviewRecord",
+    "ReviewAuditRecord",
+    "ReviewCommentRecord",
+    "ReviewCommentRequest",
+    "ReviewHistoryResponse",
     "ResearchEvent",
     "ResearchReport",
     "ResearchRequest",
@@ -174,6 +218,10 @@ __all__ = [
     "ResearchTimelineResponse",
     "ResearchSource",
     "ResearchTask",
+    "CredibilityFactor",
+    "CredibilityFactorStatus",
+    "CredibilityLabel",
+    "SourceCredibilityEvaluation",
     # API models
     "ApiError",
     "ApiResponse",
@@ -228,7 +276,11 @@ __all__ = [
     "CitationStyle",
     "ClaimStatus",
     "ClaimType",
+    "ContradictionCategory",
     "ContradictionSeverity",
+    "ReviewAction",
+    "ReviewCommentKind",
+    "ReviewStatus",
     "ContradictionStatus",
     "DocumentProcessingStatus",
     "ErrorCode",

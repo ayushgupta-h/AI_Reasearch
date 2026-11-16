@@ -133,8 +133,10 @@ class ClaimType(str, Enum):
 class ClaimStatus(str, Enum):
     UNVERIFIED = "unverified"
     SUPPORTED = "supported"
+    PARTIALLY_SUPPORTED = "partially_supported"
     CONTRADICTED = "contradicted"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    INSUFFICIENT_CONTEXT = "insufficient_context"
 
 
 class EvidenceStance(str, Enum):
@@ -156,6 +158,18 @@ class ContradictionStatus(str, Enum):
     ACCEPTED_AMBIGUITY = "accepted_ambiguity"
 
 
+class ContradictionCategory(str, Enum):
+    """Explainable relationship between two related claims."""
+
+    DIRECT_CONTRADICTION = "direct_contradiction"
+    PARTIAL_CONTRADICTION = "partial_contradiction"
+    CONTEXTUAL_DIFFERENCE = "contextual_difference"
+    METHODOLOGICAL_DIFFERENCE = "methodological_difference"
+    TEMPORAL_DIFFERENCE = "temporal_difference"
+    NO_CONTRADICTION = "no_contradiction"
+    INSUFFICIENT_INFORMATION = "insufficient_information"
+
+
 class ReportStatus(str, Enum):
     DRAFT = "draft"
     UNDER_REVIEW = "under_review"
@@ -169,6 +183,46 @@ class ApprovalDecision(str, Enum):
     APPROVED = "approved"
     CHANGES_REQUESTED = "changes_requested"
     REJECTED = "rejected"
+
+
+class ReviewStatus(str, Enum):
+    """Lifecycle shared by plan and report review."""
+
+    DRAFT = "draft"
+    PENDING = "pending"
+    PENDING_REVIEW = "pending_review"
+    REVIEWING = "reviewing"
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+    REVISION_REQUESTED = "revision_requested"
+    REJECTED = "rejected"
+    REVISED = "revised"
+    PUBLISHED = "published"
+
+
+class ReviewAction(str, Enum):
+    """Audit action written for every human review operation."""
+
+    PLAN_SUBMITTED = "plan_submitted"
+    PLAN_APPROVED = "plan_approved"
+    PLAN_CHANGES_REQUESTED = "plan_changes_requested"
+    PLAN_REJECTED = "plan_rejected"
+    PLAN_REVISED = "plan_revised"
+    REPORT_SUBMITTED = "report_submitted"
+    REPORT_APPROVED = "report_approved"
+    REPORT_CHANGES_REQUESTED = "report_changes_requested"
+    REPORT_REJECTED = "report_rejected"
+    REPORT_REVISED = "report_revised"
+    COMMENT_ADDED = "comment_added"
+
+
+class ReviewCommentKind(str, Enum):
+    """Structured feedback category for review comments."""
+
+    GENERAL = "general"
+    CORRECTION = "correction"
+    UNSUPPORTED_CLAIM = "unsupported_claim"
+    ADDITIONAL_RESEARCH = "additional_research"
 
 
 class DocumentProcessingStatus(str, Enum):
@@ -239,8 +293,47 @@ class HealthState(str, Enum):
     ERROR = "error"
 
 
+class ObjectiveStatus(str, Enum):
+    """Coverage status of a single research objective."""
+
+    COMPLETE = "complete"
+    PARTIALLY_COMPLETE = "partially_complete"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    NOT_INVESTIGATED = "not_investigated"
+    BLOCKED = "blocked"
+
+
+class CompletenessStatus(str, Enum):
+    """Overall research completeness status."""
+
+    COMPLETE = "complete"
+    PARTIALLY_COMPLETE = "partially_complete"
+    INSUFFICIENT = "insufficient"
+
+
+class NotificationType(str, Enum):
+    """Categories of user-facing notification events."""
+
+    RESEARCH_QUEUED = "research_queued"
+    RESEARCH_STARTED = "research_started"
+    RESEARCH_COMPLETED = "research_completed"
+    RESEARCH_FAILED = "research_failed"
+    APPROVAL_REQUIRED = "approval_required"
+    REVISION_REQUESTED = "revision_requested"
+    REPORT_APPROVED = "report_approved"
+    DOCUMENT_PROCESSING_COMPLETED = "document_processing_completed"
+    DOCUMENT_PROCESSING_FAILED = "document_processing_failed"
+
+
+class NotificationStatus(str, Enum):
+    """Delivery/read status of a notification."""
+
+    UNREAD = "unread"
+    READ = "read"
+    ARCHIVED = "archived"
+
+
 class ErrorCode(str, Enum):
-    """Mirrors the codes emitted by :mod:`app.errors`."""
 
     BAD_REQUEST = "bad_request"
     VALIDATION_ERROR = "validation_error"

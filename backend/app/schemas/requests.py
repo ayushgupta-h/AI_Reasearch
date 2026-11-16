@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.config import get_settings
 from app.schemas.base import LongText, MediumText, Name
@@ -31,10 +31,15 @@ class ResearchRunRequest(BaseModel):
 
     topic: str = Field(
         ...,
+        validation_alias=AliasChoices("topic", "query", "research_question"),
         min_length=3,
         max_length=500,
         description="The research topic or question to investigate.",
         examples=["Impact of large language models on scientific discovery"],
+    )
+    research_id: Optional[str] = Field(
+        None,
+        description="Optional client-provided research ID.",
     )
     provider: ProviderName = Field(
         default_factory=lambda: get_settings().default_provider,  # type: ignore[arg-type]
@@ -56,6 +61,10 @@ class ResearchRunRequest(BaseModel):
     output_dir: str = Field(
         default_factory=lambda: str(get_settings().reports_dir),
         description="Directory where the final report artifacts are saved. Must stay inside the reports directory.",
+    )
+    require_plan_approval: bool = Field(
+        False,
+        description="Pause after planning and wait for an authenticated human plan decision.",
     )
 
     @field_validator("topic")

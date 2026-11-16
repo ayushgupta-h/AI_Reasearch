@@ -274,6 +274,10 @@ class ResearchExecutionRequest:
     # Set by the research service so execution history can be recorded against
     # the same id that the SSE stream exposes.
     research_id: Optional[str] = None
+    # Optional project container ID (for ownership grouping).
+    project_id: Optional[str] = None
+    # Pause after intake so a human can approve the proposed plan.
+    require_plan_approval: bool = False
 
 
 @runtime_checkable

@@ -50,6 +50,12 @@ class ResearchSource(Base, TimestampMixin):
     evidence: Mapped[List["ResearchEvidence"]] = relationship(
         back_populates="source", cascade="all, delete-orphan"
     )
+    credibility_evaluations: Mapped[List["SourceCredibilityEvaluation"]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
+    memories: Mapped[List["ResearchMemory"]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
 
 
 class ResearchClaim(Base, TimestampMixin):
@@ -107,6 +113,9 @@ class ResearchEvidence(Base, TimestampMixin):
     claim_links: Mapped[List["ClaimEvidence"]] = relationship(
         back_populates="evidence", cascade="all, delete-orphan"
     )
+    contradiction_links: Mapped[List["ContradictionEvidence"]] = relationship(
+        back_populates="evidence", cascade="all, delete-orphan"
+    )
 
 
 class ClaimEvidence(Base):
@@ -148,12 +157,16 @@ class ResearchContradiction(Base, TimestampMixin):
     claim_b_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("research_claims.id", ondelete="CASCADE"), nullable=False
     )
+    category: Mapped[str] = mapped_column(
+        String(40), default="insufficient_information", nullable=False
+    )
     severity: Mapped[str] = mapped_column(String(20), default="medium", nullable=False)
     status: Mapped[str] = mapped_column(
         String(30), default="unresolved", nullable=False
     )
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     resolution_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    analysis_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     session: Mapped["ResearchSession"] = relationship(back_populates="contradictions")
     claim_a: Mapped["ResearchClaim"] = relationship(
@@ -162,10 +175,47 @@ class ResearchContradiction(Base, TimestampMixin):
     claim_b: Mapped["ResearchClaim"] = relationship(
         foreign_keys=[claim_b_id], back_populates="contradictions_as_b"
     )
+    evidence_links: Mapped[List["ContradictionEvidence"]] = relationship(
+        back_populates="contradiction", cascade="all, delete-orphan"
+    )
+
+
+class ContradictionEvidence(Base):
+    """Associates one evidence item with one side of a contradiction."""
+
+    __tablename__ = "contradiction_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "contradiction_id",
+            "evidence_id",
+            name="uq_contradiction_evidence",
+        ),
+        Index("ix_contradiction_evidence_evidence", "evidence_id"),
+    )
+
+    contradiction_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_contradictions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    evidence_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_evidence.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    side: Mapped[str] = mapped_column(String(1), default="a", nullable=False)
+    weight: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(nullable=False)
+
+    contradiction: Mapped["ResearchContradiction"] = relationship(
+        back_populates="evidence_links"
+    )
+    evidence: Mapped["ResearchEvidence"] = relationship(
+        back_populates="contradiction_links"
+    )
 
 
 __all__ = [
     "ClaimEvidence",
+    "ContradictionEvidence",
     "ResearchClaim",
     "ResearchContradiction",
     "ResearchEvidence",

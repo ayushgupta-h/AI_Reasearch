@@ -23,7 +23,13 @@ from app.schemas.agent_history import (
     TimelineEventRecord,
 )
 from app.schemas.citation import Citation
-from app.schemas.claim import Claim, Contradiction, Evidence
+from app.schemas.claim import (
+    Claim,
+    Contradiction,
+    ContradictionAnalysis,
+    ContradictionDifference,
+    Evidence,
+)
 from app.schemas.common import PaginationMeta, PaginationParams
 from app.schemas.documents import (
     DocumentListResponse,
@@ -63,7 +69,22 @@ from app.schemas.responses import (
 )
 from app.schemas.session import ResearchSession
 from app.schemas.source import ResearchSource
+from app.schemas.source_credibility import SourceCredibilityEvaluation
 from app.schemas.task import ResearchTask
+from app.schemas.review import (
+    PlanModificationRequest,
+    PlanReviewDecisionRequest,
+    PlanReviewResponse,
+    ReportReviewDecisionRequest,
+    ReportReviewRecord,
+    ReportReviewResponse,
+    ReportRevisionRequest,
+    ResearchPlanReviewRecord,
+    ReviewAuditRecord,
+    ReviewCommentRecord,
+    ReviewCommentRequest,
+    ReviewHistoryResponse,
+)
 
 # The 20 contract families required by stage 1.4.
 REQUIRED_CONTRACT_SCHEMAS: Tuple[str, ...] = (
@@ -98,16 +119,31 @@ CONTRACT_SCHEMAS: Dict[str, Type[BaseModel]] = {
     "ResearchTask": ResearchTask,
     "AgentExecution": AgentExecution,
     "ResearchSource": ResearchSource,
+    "SourceCredibilityEvaluation": SourceCredibilityEvaluation,
     "Citation": Citation,
     "Claim": Claim,
     "Evidence": Evidence,
     "Contradiction": Contradiction,
+    "ContradictionAnalysis": ContradictionAnalysis,
+    "ContradictionDifference": ContradictionDifference,
     "ResearchReport": ResearchReport,
     "ReportVersion": ReportVersion,
     "ChatRequest": ChatRequest,
     "ChatResponse": ChatResponse,
     "FileUploadMetadata": FileUploadMetadata,
     "ResearchApproval": ResearchApproval,
+    "PlanModificationRequest": PlanModificationRequest,
+    "PlanReviewDecisionRequest": PlanReviewDecisionRequest,
+    "PlanReviewResponse": PlanReviewResponse,
+    "ReportReviewDecisionRequest": ReportReviewDecisionRequest,
+    "ReportReviewRecord": ReportReviewRecord,
+    "ReportReviewResponse": ReportReviewResponse,
+    "ReportRevisionRequest": ReportRevisionRequest,
+    "ResearchPlanReviewRecord": ResearchPlanReviewRecord,
+    "ReviewAuditRecord": ReviewAuditRecord,
+    "ReviewCommentRecord": ReviewCommentRecord,
+    "ReviewCommentRequest": ReviewCommentRequest,
+    "ReviewHistoryResponse": ReviewHistoryResponse,
     "ApiError": ApiError,
     "ProviderStatus": ProviderStatus,
     "HealthStatus": HealthStatus,

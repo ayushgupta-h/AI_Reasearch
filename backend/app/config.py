@@ -153,6 +153,8 @@ class Settings:
         "http://127.0.0.1:5500",
         "http://localhost:8123",
         "http://127.0.0.1:8123",
+        "http://localhost:8124",
+        "http://127.0.0.1:8124",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     )

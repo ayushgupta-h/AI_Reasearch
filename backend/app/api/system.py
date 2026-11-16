@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST
 
-from app.config import PROVIDER_ORDER, Settings, get_settings
+from app.config import PROVIDER_ORDER, get_settings
 from app.observability import current_request_id
 from app.schemas.envelopes import HealthEnvelope, ProvidersEnvelope
-from app.schemas.enums import HealthState, LLMProvider, ProviderState
-from app.schemas.health import HealthStatus
-from app.schemas.provider import ProviderStatus
+from app.schemas.enums import HealthState
 from app.schemas.responses import ProvidersResponse
+from app.services.container import get_health_service
+from app.services.health_service import HealthService
 from app.telemetry.metrics import get_metrics
 
 router = APIRouter()
@@ -45,16 +45,6 @@ _ENVELOPE_NOTE = (
 )
 
 
-def _provider_status(settings: Settings, provider: str, rank: int) -> ProviderStatus:
-    configured = bool(settings.provider_api_key(provider))
-    return ProviderStatus(
-        provider=LLMProvider(provider),
-        model=settings.model_for(provider) or "unspecified",
-        state=ProviderState.READY if configured else ProviderState.MISSING_CREDENTIALS,
-        fallback_rank=rank,
-    )
-
-
 @router.get(
     "/health",
     tags=["System"],
@@ -67,19 +57,12 @@ def _provider_status(settings: Settings, provider: str, rank: int) -> ProviderSt
     },
 )
 async def health_check(
-    request: Request, envelope: bool = _ENVELOPE_PARAM
+    request: Request,
+    envelope: bool = _ENVELOPE_PARAM,
+    health: HealthService = Depends(get_health_service),
 ) -> JSONResponse:
     """Liveness check endpoint."""
-    settings = get_settings()
-    started_at = getattr(request.app.state, "started_at", None)
-    uptime = round(time.time() - started_at, 1) if started_at else None
-
-    status = HealthStatus(
-        status=HealthState.OK,
-        version=settings.api_version,
-        environment=settings.app_env,
-        uptime_seconds=uptime,
-    )
+    status = health.liveness()
     if envelope:
         body = HealthEnvelope(
             data=status,
@@ -89,6 +72,47 @@ async def health_check(
     else:
         body = status.to_payload()
     return JSONResponse(body)
+
+
+@router.get(
+    "/health/live",
+    tags=["System"],
+    summary="Liveness check",
+    responses={200: {"description": "Process is alive (never depends on optional deps)."}},
+)
+async def health_live(
+    health: HealthService = Depends(get_health_service),
+) -> JSONResponse:
+    return JSONResponse(health.liveness().to_payload())
+
+
+@router.get(
+    "/health/ready",
+    tags=["System"],
+    summary="Readiness check",
+    responses={
+        200: {"description": "Application can accept workload."},
+        503: {"description": "Core dependency unavailable; app not ready."},
+    },
+)
+async def health_ready(
+    health: HealthService = Depends(get_health_service),
+) -> JSONResponse:
+    status = health.readiness()
+    code = 200 if status.status == HealthState.OK else 503
+    return JSONResponse(status.to_payload(), status_code=code)
+
+
+@router.get(
+    "/health/dependencies",
+    tags=["System"],
+    summary="Full dependency report",
+    responses={200: {"description": "Configured dependencies and provider statuses."}},
+)
+async def health_dependencies(
+    health: HealthService = Depends(get_health_service),
+) -> JSONResponse:
+    return JSONResponse(health.dependencies().to_payload())
 
 
 @router.get(
@@ -102,17 +126,16 @@ async def health_check(
         }
     },
 )
-async def list_providers(envelope: bool = _ENVELOPE_PARAM) -> JSONResponse:
+async def list_providers(
+    envelope: bool = _ENVELOPE_PARAM,
+    health: HealthService = Depends(get_health_service),
+) -> JSONResponse:
     """Return the supported LLM providers, the default, and non-sensitive status."""
     settings = get_settings()
-    statuses = [
-        _provider_status(settings, provider, rank)
-        for rank, provider in enumerate(PROVIDER_ORDER, start=1)
-    ]
     payload = ProvidersResponse(
         providers=list(PROVIDER_ORDER),
         default=settings.default_provider,
-        statuses=statuses,
+        statuses=health.provider_statuses(probe=False),
     )
     if envelope:
         body = ProvidersEnvelope(
