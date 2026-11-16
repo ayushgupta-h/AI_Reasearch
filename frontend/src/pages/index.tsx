@@ -763,7 +763,37 @@ export function ProgressTimeline({ stages, status, error, onRetry, startedAt }: 
         <span className="text-[#817463]">Elapsed <Elapsed running={status === 'streaming' || status === 'connecting' || status === 'reconnecting'} startedAt={startedAt} /></span>
       </div>
       {stages.length === 0 && status !== 'done' && (
-        <p className="text-[13px] text-[#817463]">Connecting to research event stream…</p>
+        <div className="space-y-2">
+          <p className="text-[13px] text-[#817463]">Connecting to research event stream…</p>
+          {(API_BASE.includes('127.0.0.1') || API_BASE.includes('localhost')) && typeof window !== 'undefined' && window.location.hostname.includes('vercel.app') && (
+            <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+              <p className="font-semibold text-amber-300">Backend URL required</p>
+              <p className="mt-1 text-[#C0B19C]">
+                The frontend is hosted on Vercel and needs your Render backend URL to run AI agents and event streams. Paste it below:
+              </p>
+              <div className="mt-2.5 flex gap-2">
+                <Input
+                  id="render-url-input"
+                  placeholder="https://quest-xxxx.onrender.com"
+                  className="font-mono text-xs flex-1"
+                />
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => {
+                    const el = document.getElementById('render-url-input') as HTMLInputElement;
+                    if (el && el.value.trim()) {
+                      localStorage.setItem('questApi', el.value.trim().replace(/\/$/, ''));
+                      window.location.reload();
+                    }
+                  }}
+                >
+                  Connect
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
       <ol className="space-y-2.5">
         {stages.map((s, i) => (
@@ -1019,7 +1049,14 @@ function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onT
         {!collapsed && (
           <div>
             <p className="px-2 pb-1 text-[10px] font-mono uppercase tracking-wider text-[#817463]">Recent Investigations</p>
-            {isLoading ? (
+            {(API_BASE.includes('127.0.0.1') || API_BASE.includes('localhost')) && typeof window !== 'undefined' && window.location.hostname.includes('vercel.app') ? (
+              <div className="px-2 py-3 text-center">
+                <p className="text-[11px] text-amber-300">Backend not connected</p>
+                <button onClick={() => navigate('/app/settings')} className="mt-1 text-[11px] text-[#C5A36A] underline hover:text-[#E9D6B6]">
+                  Configure Render URL
+                </button>
+              </div>
+            ) : isLoading ? (
               <div className="flex justify-center py-4"><Spinner /></div>
             ) : filtered.length === 0 ? (
               <p className="px-3 py-2 text-[12px] text-[#817463]">{q ? 'No matches' : 'No research sessions'}</p>
