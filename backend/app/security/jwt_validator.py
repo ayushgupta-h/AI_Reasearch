@@ -28,9 +28,21 @@ from fastapi import HTTPException
 
 from app.observability import bind_user
 
-# Allowlist of signing algorithms we are willing to accept. Supabase currently
-# issues HS256 tokens; with a JWKS endpoint configured we also accept RS256.
-_ALLOWED_ALGORITHMS = frozenset({"HS256", "RS256"})
+# Allowlist of signing algorithms we are willing to accept.
+# Supabase projects use ES256 (ECDSA P-256) by default via JWKS, as well as RS256/HS256.
+_ALLOWED_ALGORITHMS = frozenset({
+    "HS256", "HS384", "HS512",
+    "RS256", "RS384", "RS512",
+    "ES256", "ES384", "ES512",
+    "PS256", "PS384", "PS512",
+    "EdDSA",
+})
+_ASYMMETRIC_ALGORITHMS = frozenset({
+    "RS256", "RS384", "RS512",
+    "ES256", "ES384", "ES512",
+    "PS256", "PS384", "PS512",
+    "EdDSA",
+})
 # Audience enforced when present in the token payload (Supabase uses "authenticated").
 DEFAULT_AUDIENCE = "authenticated"
 
@@ -70,10 +82,12 @@ class SupabaseJWTValidator:
         jwt_secret: str = "",
         jwks_endpoint: str = "",
         audience: str = "",
+        anon_key: str = "",
     ) -> None:
         self._supabase_url = (supabase_url or "").rstrip("/")
         self._jwt_secret = jwt_secret
         self._audience = audience or DEFAULT_AUDIENCE
+        self._anon_key = anon_key
         self._jwks_endpoint = jwks_endpoint or (
             f"{self._supabase_url}/auth/v1/.well-known/jwks.json" if self._supabase_url else ""
         )
@@ -87,7 +101,11 @@ class SupabaseJWTValidator:
                 raise JWTValidationError(detail="No JWKS endpoint configured.")
             from jwt import PyJWKClient
 
-            self._jwks_client = PyJWKClient(self._jwks_endpoint, cache_keys=True)
+            self._jwks_client = PyJWKClient(
+                self._jwks_endpoint,
+                cache_keys=True,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ResearchAI/2.0"},
+            )
         return self._jwks_client
 
     # ── Public API ──────────────────────────────────────────────────
@@ -109,26 +127,32 @@ class SupabaseJWTValidator:
             raise JWTValidationError(detail="Token has expired. Please log in again.")
 
         alg = self._header_alg(token)
+        if alg not in _ALLOWED_ALGORITHMS:
+            raise JWTValidationError(detail=f"Unsupported token signing algorithm: {alg}")
 
         # 2. Cryptographic verification.
         payload: Dict[str, Any]
-        if alg == "HS256":
+        if alg.startswith("HS"):
             payload = self._verify_hs256(token)
-        elif alg == "RS256":
-            payload = self._verify_rs256(token)
+        elif alg in _ASYMMETRIC_ALGORITHMS:
+            payload = self._verify_asymmetric(token, alg)
         else:
             raise JWTValidationError(detail="Unsupported token signing algorithm.")
 
         # 3. Issuer validation whenever we know the Supabase URL.
         if self._supabase_url:
-            iss = payload.get("iss", "")
-            if not iss.startswith(self._supabase_url):
+            iss = str(payload.get("iss", ""))
+            project_ref = self._supabase_url.split("//")[-1].split(".")[0]
+            if not (iss.startswith(self._supabase_url) or iss == "supabase" or project_ref in iss):
                 raise JWTValidationError(detail="Invalid token issuer.")
 
         # 4. Audience validation when configured.
         if self._audience:
             aud = payload.get("aud")
-            if aud != self._audience:
+            if isinstance(aud, list):
+                if self._audience not in aud:
+                    raise JWTValidationError(detail="Invalid token audience.")
+            elif aud and aud != self._audience:
                 raise JWTValidationError(detail="Invalid token audience.")
 
         user_info = {
@@ -168,27 +192,64 @@ class SupabaseJWTValidator:
         except Exception as e:
             raise JWTValidationError() from e
 
-    def _verify_rs256(self, token: str) -> Dict[str, Any]:
+    def _remote_supabase_verify(self, token: str) -> Optional[Dict[str, Any]]:
+        """Fallback to Supabase Auth API /auth/v1/user if local JWKS check encounters an issue."""
+        if not self._supabase_url:
+            return None
+        try:
+            import json
+            import urllib.request
+            req = urllib.request.Request(
+                f"{self._supabase_url}/auth/v1/user",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "apikey": self._anon_key or "",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ResearchAI/2.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    sub = data.get("id")
+                    if sub:
+                        return {
+                            "sub": sub,
+                            "email": data.get("email", ""),
+                            "user_metadata": data.get("user_metadata", {}) or {},
+                            "role": data.get("role", "authenticated"),
+                            "iss": f"{self._supabase_url}/auth/v1",
+                            "aud": self._audience,
+                        }
+        except Exception:
+            return None
+        return None
+
+    def _verify_asymmetric(self, token: str, alg: str) -> Dict[str, Any]:
         try:
             signing_key = self._get_jwks_client().get_signing_key_from_jwt(token)
-        except Exception as e:
-            raise JWTValidationError() from e
-        try:
             return jwt.decode(
                 token,
                 signing_key.key,
-                algorithms=["RS256"],
+                algorithms=[alg],
                 options={"verify_aud": False, "verify_iss": False},
             )
         except jwt.ExpiredSignatureError as e:
             raise JWTValidationError(detail="Token has expired. Please log in again.") from e
         except Exception as e:
-            raise JWTValidationError() from e
+            # If JWKS key resolution failed, attempt remote Supabase verification before rejecting
+            remote_payload = self._remote_supabase_verify(token)
+            if remote_payload:
+                return remote_payload
+            raise JWTValidationError(detail=f"Token signature verification failed: {e}") from e
+
+    def _verify_rs256(self, token: str) -> Dict[str, Any]:
+        return self._verify_asymmetric(token, "RS256")
 
 
 # Module-level default validator bound at import time from environment.
 def build_default_validator() -> SupabaseJWTValidator:
     from app.config import (
+        SUPABASE_ANON_KEY,
         SUPABASE_JWKS_ENDPOINT,
         SUPABASE_JWT_SECRET,
         SUPABASE_URL,
@@ -199,6 +260,7 @@ def build_default_validator() -> SupabaseJWTValidator:
         jwt_secret=SUPABASE_JWT_SECRET,
         jwks_endpoint=SUPABASE_JWKS_ENDPOINT,
         audience=DEFAULT_AUDIENCE,
+        anon_key=SUPABASE_ANON_KEY,
     )
 
 

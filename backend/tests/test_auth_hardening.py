@@ -168,6 +168,40 @@ class TestJWTHardening:
         user = v.verify(rs_token)
         assert user["user_id"] == "user-rs"
 
+    def test_es256_via_jwks_is_verified(self, monkeypatch) -> None:
+        """Supabase default ES256 (ECDSA P-256) asymmetric token is verified via JWKS."""
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key = private_key.public_key()
+
+        payload = {
+            "sub": "user-es256",
+            "email": "user-es@example.com",
+            "aud": DEFAULT_AUDIENCE,
+            "role": "authenticated",
+            "iss": f"{TEST_ISS}/auth/v1",
+            "exp": int(time.time()) + 3600,
+            "user_metadata": {"provider": "google"},
+        }
+        es_token = jwt.encode(payload, private_key, algorithm="ES256", headers={"kid": "test-es-key-1"})
+
+        fake_client = MagicMock()
+        fake_key = MagicMock()
+        fake_key.key = public_key
+        fake_client.get_signing_key_from_jwt.return_value = fake_key
+
+        v = SupabaseJWTValidator(
+            TEST_ISS,
+            jwt_secret="",
+            jwks_endpoint=f"{TEST_ISS}/auth/v1/.well-known/jwks.json",
+            audience=DEFAULT_AUDIENCE,
+        )
+        v._jwks_client = fake_client
+        user = v.verify(es_token)
+        assert user["user_id"] == "user-es256"
+        assert user["email"] == "user-es@example.com"
+
     def test_jwks_key_rotation_refetches(self, monkeypatch) -> None:
         """Unknown kid triggers a JWKS refetch (never trusts the old key)."""
         from unittest.mock import call
