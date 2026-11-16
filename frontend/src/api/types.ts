@@ -43,6 +43,12 @@ export interface ResearchSession {
   sources_count?: number;
   claims_count?: number;
   summary?: string;
+  report_content?: string;
+  sources?: any[];
+  claims?: any[];
+  citations_verified?: number;
+  citations_total?: number;
+  timestamp?: string;
   created_at?: string;
   updated_at?: string;
 }

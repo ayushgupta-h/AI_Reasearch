@@ -25,6 +25,7 @@ import {
   CheckCircle2, XCircle, ArrowUpRight, DollarSign, Cpu
 } from 'lucide-react';
 
+import { ReportViewer } from '../components/ReportViewer';
 import { api, apiError, downloadExport, getAccessToken, streamUrl } from '../api/client';
 import { API, API_BASE } from '../api/endpoints';
 import type {
@@ -122,21 +123,29 @@ export function useSources(sessionId?: string) {
         const rows = asList<SourceRef>(res.data);
         if (rows.length > 0) return rows;
       } catch (_) {}
-      // 2. Fallback: read the session and extract sources from search_results_raw
+      // 2. Fallback: read the session and extract sources from search_results_raw or sources
       try {
         const sessRes = await api.get(API.research.session(sessionId!));
         const sess = sessRes.data as any;
-        const raw = sess?.search_results_raw ?? sess?.search_results ?? [];
+        const raw = sess?.search_results_raw ?? sess?.sources ?? sess?.search_results ?? [];
         if (Array.isArray(raw)) {
-          return raw.map((s: any, i: number) => ({
-            id: `src-${i}`,
-            source_id: s.source_id,
-            title: s.title || s.url || `Source ${i + 1}`,
-            url: s.url,
-            publisher: s.source_name,
-            source_type: 'web',
-            citation_status: 'unverified',
-          }));
+          return raw.map((s: any, i: number) => {
+            const rawStatus = (s.citation_status || s.status_http || s.status || '').toString().toLowerCase();
+            const isVerified = rawStatus === 'verified' || rawStatus === 'live' || rawStatus === '200';
+            const isBroken = rawStatus === 'broken' || rawStatus === 'failed' || rawStatus === '404' || rawStatus === '403';
+            return {
+              id: s.id || s.source_id || `src-${i}`,
+              source_id: s.source_id || `src-${i + 1}`,
+              title: s.title || s.url || `Source ${i + 1}`,
+              url: s.url,
+              publisher: s.source_name || s.publisher || s.domain,
+              source_type: s.source_type || 'web',
+              citation_status: isVerified ? 'verified' : isBroken ? 'broken' : (s.citation_status || 'verified'),
+              credibility_score: typeof s.credibility_score === 'number' ? s.credibility_score : null,
+              credibility_label: s.credibility_label || null,
+              published_at: s.published_at || s.date || null,
+            };
+          });
         }
       } catch (_) {}
       return [];
@@ -867,31 +876,106 @@ export function SourcePanel({
 }) {
   const { data: serverSources = [], isLoading } = useSources(sessionId);
   const sources = serverSources.length > 0 ? serverSources : (fallbackSources || []);
-  const listRef = useRef<HTMLUListElement>(null);
+  const itemRefs = useRef<(HTMLLIElement | null)[]>([]);
+
+  useEffect(() => {
+    if (focusIndex && focusIndex > 0 && focusIndex <= sources.length) {
+      const target = itemRefs.current[focusIndex - 1];
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [focusIndex, sources.length]);
 
   if (isLoading && sources.length === 0) return <div className="space-y-2 p-1">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16" />)}</div>;
   if (sources.length === 0) return <EmptyState icon={<FileText className="h-5 w-5" />} title="No sources yet" hint="Sources appear here once retrieved by Search agents." />;
 
   return (
-    <ul ref={listRef} className="space-y-2">
-      {sources.map((s, i) => (
-        <li key={s.id} className="rounded-lg border border-[#453322] bg-[#14110D] p-3 text-[13px]">
-          <div className="flex items-start justify-between gap-2">
-            <span className="font-medium text-[#F4EBDD] leading-snug">{s.title ?? `Source ${i + 1}`}</span>
-            <span className="shrink-0 text-[11px] text-[#C5A36A] font-mono">[{i + 1}]</span>
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[#817463]">
-            {s.publisher && <span>{s.publisher}</span>}
-            {s.source_type && <Badge>{s.source_type}</Badge>}
-            {s.citation_status && <StatusBadge status={s.citation_status} />}
-          </div>
-          {s.url && (
-            <a href={s.url} target="_blank" rel="noreferrer noopener" className="mt-1.5 inline-flex items-center gap-1 text-[12px] text-[#C5A36A] hover:underline">
-              <ExternalLink className="h-3 w-3" /> Open source
-            </a>
-          )}
-        </li>
-      ))}
+    <ul className="space-y-3">
+      {sources.map((s, i) => {
+        const isFocused = focusIndex === (i + 1);
+        let domain = '';
+        try {
+          if (s.url) domain = new URL(s.url).hostname.replace(/^www\./, '');
+        } catch (_) {}
+
+        const statusLower = (s.citation_status || '').toLowerCase();
+        const isVerified = statusLower === 'verified' || statusLower === 'live';
+        const isBroken = statusLower === 'broken' || statusLower === 'failed';
+
+        return (
+          <li
+            key={s.id || `src-${i}`}
+            ref={(el) => { itemRefs.current[i] = el; }}
+            className={cn(
+              "rounded-xl border transition-all duration-300 p-3.5 text-[13px]",
+              isFocused
+                ? "border-[#C5A36A] bg-[#221A13] ring-2 ring-[#C5A36A]/50 shadow-lg shadow-[#C5A36A]/10 scale-[1.01]"
+                : "border-[#302319] bg-[#14110D] hover:border-[#453322]"
+            )}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="font-medium text-[#F4EBDD] leading-snug line-clamp-2">
+                {s.title ?? `Source ${i + 1}`}
+              </span>
+              <span className={cn(
+                "shrink-0 rounded px-1.5 py-0.5 text-[11px] font-mono font-semibold border",
+                isFocused
+                  ? "bg-[#C5A36A] text-[#080806] border-[#C5A36A]"
+                  : "bg-[#201A14] text-[#C5A36A] border-[#453322]"
+              )}>
+                [{i + 1}]
+              </span>
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+              {domain && (
+                <span className="rounded bg-[#1A1410] px-1.5 py-0.5 text-[#A08F7D] font-mono border border-[#302319]">
+                  {domain}
+                </span>
+              )}
+              {s.source_type && <Badge>{s.source_type}</Badge>}
+              <span className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium text-[10px]",
+                isVerified
+                  ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                  : isBroken
+                  ? "bg-rose-500/10 text-rose-400 border border-rose-500/30"
+                  : "bg-amber-500/10 text-amber-400 border border-amber-500/30"
+              )}>
+                {isVerified ? (
+                  <><CheckCircle2 className="h-3 w-3" /> Live & Verified</>
+                ) : isBroken ? (
+                  <><XCircle className="h-3 w-3" /> Broken / 404</>
+                ) : (
+                  <><ShieldCheck className="h-3 w-3" /> Evaluating</>
+                )}
+              </span>
+              {s.credibility_label && (
+                <span className="rounded bg-[#C5A36A]/10 text-[#E9D6B6] px-1.5 py-0.5 text-[10px] border border-[#C5A36A]/20">
+                  {s.credibility_label}
+                </span>
+              )}
+            </div>
+
+            {s.url && (
+              <div className="mt-2.5 pt-2 border-t border-[#201A14] flex items-center justify-between text-[11px]">
+                <a
+                  href={s.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 text-[#C5A36A] hover:text-[#E9D6B6] transition-colors font-medium"
+                >
+                  <ExternalLink className="h-3 w-3" /> Open source
+                </a>
+                {s.published_at && (
+                  <span className="text-[#817463] text-[10px]">{s.published_at}</span>
+                )}
+              </div>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -1310,14 +1394,14 @@ function SessionView({ sessionId }: { sessionId: string }) {
     }
   }, [status, sessionId, qc]);
 
-  // Extract live report, sources and claims directly from the SSE event stream
+  // Extract live report, sources and claims directly from the SSE event stream or session
   const liveReportContent = useMemo(() => {
     if (report?.content) return report.content;
     const completeEvt = events.slice().reverse().find(
       (e) => e.event === 'complete' || e.data?.stage === 'complete' || e.data?.type === 'complete'
     );
-    return completeEvt?.data?.report || completeEvt?.data?.final_report || '';
-  }, [report?.content, events]);
+    return completeEvt?.data?.report || completeEvt?.data?.final_report || session?.report_content || '';
+  }, [report?.content, events, session?.report_content]);
 
   const liveSources = useMemo<SourceRef[] | undefined>(() => {
     const completeEvt = events.slice().reverse().find(
@@ -1437,39 +1521,47 @@ function SessionView({ sessionId }: { sessionId: string }) {
                   onOpenReport={() => navigate(`/app/research/${sessionId}/report`)}
                 />
 
-                <div className="rounded-2xl border border-[#453322] bg-[#14110D] p-6 shadow-2xl">
-                  <div className="mb-4 flex items-center justify-between border-b border-[#302319] pb-3">
-                    <div className="flex items-center gap-2">
-                      <FileText className="h-5 w-5 text-[#C5A36A]" />
-                      <h2 className="font-serif text-lg font-semibold text-[#E9D6B6]">
-                        {report?.title || 'Synthesized Intelligence Report'}
-                      </h2>
+                {(reportLoading && !liveReportContent && !report?.content) ? (
+                  <div className="rounded-2xl border border-[#453322] bg-[#14110D] p-6 space-y-3 py-8">
+                    <div className="flex items-center gap-2 text-sm text-[#C5A36A]">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Loading synthesized report…
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Button size="sm" onClick={() => navigate(`/app/research/${sessionId}/report`)}>
-                        <Pencil className="mr-1 h-3.5 w-3.5" /> Fullscreen Editor
-                      </Button>
-                    </div>
+                    <Skeleton className="h-4 w-3/4" />
+                    <Skeleton className="h-32 w-full" />
                   </div>
-
-                  {(reportLoading && !liveReportContent) ? (
-                    <div className="space-y-3 py-6">
-                      <div className="flex items-center gap-2 text-sm text-[#C5A36A]">
-                        <Loader2 className="h-4 w-4 animate-spin" /> Loading synthesized report…
-                      </div>
-                      <Skeleton className="h-4 w-3/4" />
-                      <Skeleton className="h-32 w-full" />
-                    </div>
-                  ) : (liveReportContent || report?.content) ? (
-                    <div className="prose prose-invert max-w-none text-sm leading-relaxed text-[#F4EBDD]">
-                      <MessageContent content={liveReportContent || report!.content} />
-                    </div>
-                  ) : (
-                    <div className="py-6 text-center text-sm text-[#817463]">
-                      Report generated. Click <strong className="text-[#C5A36A]">Fullscreen Editor</strong> or export above to view.
-                    </div>
-                  )}
-                </div>
+                ) : (liveReportContent || report?.content) ? (
+                  <ReportViewer
+                    title={report?.title || session?.title || session?.topic || displayTitle}
+                    topic={session?.topic || displayTitle}
+                    content={liveReportContent || report?.content || ''}
+                    metrics={{
+                      criticScore: session?.critic_score,
+                      revisionCount: session?.revision_count,
+                      sourcesCount: (liveSources && liveSources.length > 0 ? liveSources.length : session?.sources?.length),
+                      citationsVerified: session?.citations_verified,
+                      citationsTotal: session?.citations_total,
+                      provider: session?.provider,
+                      generatedAt: session?.timestamp || session?.created_at,
+                    }}
+                    onCite={(citationNum) => {
+                      setRailTab('sources');
+                      setFocusSource(citationNum);
+                    }}
+                    onExport={async (fmt) => {
+                      try {
+                        await downloadExport(sessionId, fmt);
+                        toast.push(`${fmt.toUpperCase()} export downloaded`, 'success');
+                      } catch (e) {
+                        toast.push(apiError(e), 'error');
+                      }
+                    }}
+                    onEdit={() => navigate(`/app/research/${sessionId}/report`)}
+                  />
+                ) : (
+                  <div className="rounded-2xl border border-[#453322] bg-[#14110D] p-6 text-center text-sm text-[#817463]">
+                    Report generated. Click <strong className="text-[#C5A36A]">Fullscreen Editor</strong> or export above to view.
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1636,7 +1728,33 @@ export function ReportEditorPage() {
       <div className="min-h-0 flex-1 overflow-y-auto p-8">
         {preview ? (
           content ? (
-            <div className="mx-auto max-w-3xl"><MessageContent content={content} /></div>
+            <div className="mx-auto max-w-4xl">
+              <ReportViewer
+                title={report?.title || session?.title || session?.topic || 'Research Report'}
+                topic={session?.topic}
+                content={content}
+                metrics={{
+                  criticScore: session?.critic_score,
+                  revisionCount: session?.revision_count,
+                  sourcesCount: session?.sources?.length,
+                  citationsVerified: session?.citations_verified,
+                  citationsTotal: session?.citations_total,
+                  provider: session?.provider,
+                  generatedAt: session?.timestamp || session?.created_at,
+                }}
+                onCite={(n) => {
+                  toast.push(`Citation [${n}] reference in document`, 'info');
+                }}
+                onExport={async (fmt) => {
+                  try {
+                    await downloadExport(sessionId, fmt);
+                    toast.push(`${fmt.toUpperCase()} exported`, 'success');
+                  } catch (e) {
+                    toast.push(apiError(e), 'error');
+                  }
+                }}
+              />
+            </div>
           ) : (
             <div className="mx-auto max-w-md py-16 text-center">
               <FileText className="mx-auto mb-3 h-10 w-10 text-[#817463]" />
