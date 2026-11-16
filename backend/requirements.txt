@@ -79,6 +79,7 @@ html5lib
 # PDF & DOCX Report Export
 # ==============================
 python-docx          # DOCX / Word export
+pypdf>=4.0.0         # PDF text extraction for document ingestion
 markdown             # Markdown → HTML (for PDF pipeline)
 weasyprint           # HTML → PDF (primary PDF engine)
 reportlab            # Plain-text PDF fallback (no system deps)

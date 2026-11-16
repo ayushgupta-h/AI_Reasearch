@@ -97,13 +97,30 @@ class ResearchMemoryService:
             metadata_json=metadata_json,
         )
         if pg_record is None:
-            # Either duplicate (returned existing) or not available.
-            if self._repo.available:
-                # Duplicate — fetch and return the existing record.
-                # create_memory returns the existing dict on duplicate.
+            # Either duplicate (returned existing) or PostgreSQL not available.
+            if not self._repo.available:
+                import uuid
+                from datetime import datetime, timezone
+                mem_id = uuid.uuid4().hex
+                now = datetime.now(timezone.utc).isoformat()
+                pg_record = {
+                    "id": mem_id,
+                    "user_id": user_id,
+                    "project_id": project_id,
+                    "session_id": session_id,
+                    "source_id": source_id,
+                    "content_type": content_type,
+                    "content": content,
+                    "verification_status": verification_status,
+                    "confidence": confidence,
+                    "chroma_id": mem_id,
+                    "metadata_json": metadata_json,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            else:
                 existing = pg_record  # type: ignore[assignment]
                 return self._to_record(existing) if existing else None
-            return None
 
         # Mirror into ChromaDB for semantic retrieval.
         chroma_id: Optional[str] = None
@@ -222,16 +239,57 @@ class ResearchMemoryService:
         offset: int = 0,
     ) -> List[MemoryRecord]:
         """List owned memories, newest first."""
-        records = self._repo.list_memories(
-            user_id=user_id,
-            project_id=project_id,
-            session_id=session_id,
-            verification_status=verification_status,
-            content_type=content_type,
-            limit=limit,
-            offset=offset,
-        )
-        return [self._to_record(r) for r in records]
+        if self._repo.available:
+            records = self._repo.list_memories(
+                user_id=user_id,
+                project_id=project_id,
+                session_id=session_id,
+                verification_status=verification_status,
+                content_type=content_type,
+                limit=limit,
+                offset=offset,
+            )
+            return [self._to_record(r) for r in records]
+
+        # ChromaDB vector store fallback when PostgreSQL is not configured
+        try:
+            store = ResearchMemoryStore(
+                settings=self._settings,
+                user_id=user_id,
+                project_id=project_id,
+                session_id=session_id,
+            )
+            chroma_records = store.list_memories(
+                user_id=user_id,
+                project_id=project_id,
+                session_id=session_id,
+                content_type=content_type,
+                limit=limit,
+            )
+            out: List[MemoryRecord] = []
+            for item in chroma_records:
+                meta = item.get("metadata", {})
+                out.append(
+                    MemoryRecord(
+                        id=item.get("id", ""),
+                        user_id=meta.get("user_id", user_id),
+                        project_id=meta.get("project_id"),
+                        session_id=meta.get("session_id"),
+                        source_id=meta.get("source_id"),
+                        content_type=meta.get("content_type", "finding"),
+                        content_text=item.get("content", ""),
+                        verification_status=meta.get("verification_status", "unverified"),
+                        confidence=float(meta["confidence"]) if meta.get("confidence") else None,
+                        chroma_id=item.get("id"),
+                        metadata_json=meta.get("metadata_json"),
+                        created_at=meta.get("created_at"),
+                        updated_at=meta.get("updated_at"),
+                        deleted=False,
+                    )
+                )
+            return out
+        except Exception:
+            return []
 
     # ── Semantic retrieval ─────────────────────────────────────────────
 

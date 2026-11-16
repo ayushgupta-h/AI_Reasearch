@@ -55,6 +55,9 @@ class SessionRecord(BaseModel):
     citations_total: Optional[int] = 0
     duration_seconds: Optional[float] = None
     user_id: Optional[str] = None
+    project_id: Optional[str] = None
+    sources_count: Optional[int] = 0
+    claims_count: Optional[int] = 0
 
 
 class SessionsResponse(BaseModel):

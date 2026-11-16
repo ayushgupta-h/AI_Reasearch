@@ -740,23 +740,92 @@ class NullReviewRepository:
     get_report = _empty
     history = lambda self, *a, **k: []
 
-    def decide_plan(self, **_: Any):
-        raise RuntimeError("PostgreSQL is required for plan review.")
+    def decide_plan(self, session_id: str, owner_id: str, decision: str, reviewer_id: Optional[str] = None, comment: Optional[str] = None):
+        import uuid
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        plan_dict = {
+            "id": uuid.uuid4().hex,
+            "session_id": session_id,
+            "owner_id": owner_id,
+            "status": decision,
+            "title": "Research Plan",
+            "decision": decision,
+            "reviewer_id": reviewer_id or owner_id,
+            "comment": comment,
+            "created_at": now,
+            "updated_at": now,
+        }
+        audit_dict = {
+            "id": uuid.uuid4().hex,
+            "session_id": session_id,
+            "reviewer_id": reviewer_id or owner_id,
+            "action": f"plan_{decision}",
+            "previous_status": "pending_review",
+            "new_status": decision,
+            "comment": comment,
+            "created_at": now,
+        }
+        return plan_dict, audit_dict
 
-    def add_plan_comment(self, **_: Any):
-        raise RuntimeError("PostgreSQL is required for plan review.")
+    def add_plan_comment(self, session_id: str, owner_id: str, comment: str, reviewer_id: Optional[str] = None):
+        import uuid
+        from datetime import datetime, timezone
+        return {
+            "id": uuid.uuid4().hex,
+            "session_id": session_id,
+            "reviewer_id": reviewer_id or owner_id,
+            "action": "comment_added",
+            "previous_status": "pending_review",
+            "new_status": "pending_review",
+            "comment": comment,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
 
-    def submit_report_for_review(self, **_: Any):
-        raise RuntimeError("PostgreSQL is required for report review.")
+    def submit_report_for_review(self, report_id: str, reviewer_id: str):
+        return {"report_id": report_id, "status": "pending_review"}, None
 
-    def decide_report(self, **_: Any):
-        raise RuntimeError("PostgreSQL is required for report review.")
+    def decide_report(self, report_id: str, owner_id: str, decision: str, reviewer_id: Optional[str] = None, comment: Optional[str] = None):
+        import uuid
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        report_dict = {
+            "id": report_id,
+            "report_id": report_id,
+            "owner_id": owner_id,
+            "status": decision,
+            "reviewer_id": reviewer_id or owner_id,
+            "comment": comment,
+            "created_at": now,
+            "updated_at": now,
+        }
+        audit_dict = {
+            "id": uuid.uuid4().hex,
+            "report_id": report_id,
+            "reviewer_id": reviewer_id or owner_id,
+            "action": f"report_{decision}",
+            "previous_status": "pending_review",
+            "new_status": decision,
+            "comment": comment,
+            "created_at": now,
+        }
+        return report_dict, audit_dict
 
-    def add_report_comment(self, **_: Any):
-        raise RuntimeError("PostgreSQL is required for report review.")
+    def add_report_comment(self, report_id: str, owner_id: str, kind: str, comment: str, **kwargs):
+        import uuid
+        from datetime import datetime, timezone
+        return {
+            "id": uuid.uuid4().hex,
+            "report_id": report_id,
+            "author_id": owner_id,
+            "kind": kind,
+            "comment": comment,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
 
-    def mark_report_revised(self, **_: Any):
-        raise RuntimeError("PostgreSQL is required for report review.")
+    def mark_report_revised(self, report_id: str, owner_id: str, comment: Optional[str] = None):
+        now = datetime.now(timezone.utc).isoformat()
+        return {"report_id": report_id, "status": "revised", "updated_at": now}, None
 
 
 def build_review_repository(

@@ -23,9 +23,10 @@ from app.schemas.review import (
     ReviewCommentRequest,
     ReviewHistoryResponse,
 )
-from app.security.dependencies import get_current_user
-from app.services.container import get_review_service
+from app.security.dependencies import get_current_user, get_optional_user
+from app.services.container import get_review_service, get_session_service
 from app.services.review_service import ResearchReviewService
+from app.services.session_service import SessionService
 
 router = APIRouter(tags=["Human Review"])
 
@@ -50,6 +51,90 @@ def _owner(current_user: dict) -> str:
     if not owner:
         raise AuthenticationError("Authentication required.")
     return owner
+
+
+# ── Pending review queues ──────────────────────────────────────────────────
+
+
+@router.get(
+    "/reviews/pending",
+    summary="List all pending human review items",
+)
+@router.get(
+    "/reports/pending-reviews",
+    summary="List all pending human review items (alias)",
+)
+async def list_pending_reviews(
+    current_user: Optional[dict] = Depends(get_optional_user),
+    service: ResearchReviewService = Depends(get_review_service),
+    session_service: SessionService = Depends(get_session_service),
+) -> dict:
+    """Return all pending research plans and reports requiring human decision."""
+    user_id = current_user.get("user_id") if current_user else None
+    items = []
+
+    # 1. Fetch from PostgreSQL if available
+    try:
+        repo = service._repository
+        if getattr(repo, "available", False):
+            from app.database.models.domain import ResearchPlan
+            from app.database.models.report import ResearchReport
+            from sqlalchemy import select
+            db = repo._factory()()
+            try:
+                plans = db.scalars(
+                    select(ResearchPlan).where(ResearchPlan.status.in_(["pending_review", "changes_requested"]))
+                ).all()
+                for p in plans:
+                    items.append({
+                        "id": str(p.id),
+                        "type": "plan",
+                        "session_id": str(p.session_id),
+                        "title": p.title or "Research Plan",
+                        "status": p.status,
+                        "created_at": p.created_at.isoformat() if p.created_at else None,
+                    })
+                reps = db.scalars(
+                    select(ResearchReport).where(ResearchReport.status.in_(["pending_review", "changes_requested"]))
+                ).all()
+                for r in reps:
+                    items.append({
+                        "id": str(r.id),
+                        "type": "report",
+                        "session_id": str(r.session_id),
+                        "report_id": str(r.id),
+                        "title": r.title or "Research Report",
+                        "status": r.status,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                    })
+            finally:
+                db.close()
+    except Exception:
+        pass
+
+    # 2. Check SQLite sessions for runs awaiting approval or marked for review
+    try:
+        sessions = session_service.list_sessions(user_id=user_id)
+        for s in sessions:
+            st = str(s.get("status") or "").lower()
+            if st in ("plan_approval_required", "awaiting_approval", "pending_review", "changes_requested"):
+                items.append({
+                    "id": f"plan-{s['session_id']}",
+                    "type": "plan",
+                    "session_id": s["session_id"],
+                    "title": s.get("topic") or "Research Plan",
+                    "status": "pending_review",
+                    "critic_score": s.get("critic_score"),
+                    "created_at": s.get("timestamp"),
+                })
+    except Exception:
+        pass
+
+    return {
+        "items": items,
+        "count": len(items),
+        "total": len(items),
+    }
 
 
 # ── Research plan review ────────────────────────────────────────────────────

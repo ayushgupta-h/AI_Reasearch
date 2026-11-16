@@ -28,6 +28,7 @@ class DocumentRecord(OutputSchema):
     sha256: Sha256Hex
     storage_key: str = Field(..., min_length=1, max_length=512)
     processing_status: DocumentProcessingStatus
+    chunk_count: Optional[int] = Field(0, ge=0)
     error_code: Optional[str] = Field(None, max_length=80)
     error_message: Optional[str] = Field(None, max_length=500)
     created_at: UtcDatetime
@@ -43,6 +44,7 @@ class DocumentListResponse(OutputSchema):
 class DocumentStatusResponse(OutputSchema):
     document_id: DocumentId
     processing_status: DocumentProcessingStatus
+    chunk_count: Optional[int] = Field(0, ge=0)
     error_code: Optional[str] = Field(None, max_length=80)
     error_message: Optional[str] = Field(None, max_length=500)
     updated_at: UtcDatetime

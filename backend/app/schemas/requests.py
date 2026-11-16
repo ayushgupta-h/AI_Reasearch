@@ -41,6 +41,10 @@ class ResearchRunRequest(BaseModel):
         None,
         description="Optional client-provided research ID.",
     )
+    project_id: Optional[str] = Field(
+        None,
+        description="Optional owning project ID to isolate research sessions.",
+    )
     provider: ProviderName = Field(
         default_factory=lambda: get_settings().default_provider,  # type: ignore[arg-type]
         description="LLM provider: 'groq', 'gemini', 'mistral', or 'huggingface'.",

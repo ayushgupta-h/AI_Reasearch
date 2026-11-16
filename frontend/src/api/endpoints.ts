@@ -50,6 +50,8 @@ export const API = {
     upload: '/documents/upload',
     list: '/documents',
     get: (id: string) => `/documents/${id}`,
+    download: (id: string) => `/documents/${id}/download`,
+    process: (id: string) => `/documents/${id}/process`,
     status: (id: string) => `/documents/${id}/status`,
     delete: (id: string) => `/documents/${id}`,
   },

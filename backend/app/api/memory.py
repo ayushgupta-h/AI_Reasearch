@@ -45,7 +45,8 @@ def _owner(current_user: dict) -> str:
     summary="Semantically search research memory",
 )
 async def search_memory(
-    q: str = Query(..., min_length=3, description="Search query"),
+    q: Optional[str] = Query(None, description="Search query"),
+    query: Optional[str] = Query(None, description="Search query alias"),
     k: int = Query(6, ge=1, le=20, description="Max results"),
     project_id: Optional[str] = Query(None, description="Filter by project"),
     session_id: Optional[str] = Query(None, description="Filter by session"),
@@ -54,11 +55,27 @@ async def search_memory(
     current_user: dict = Depends(get_current_user),
     service: ResearchMemoryService = Depends(get_memory_service),
 ) -> dict:
-    """Return memory records semantically relevant to *q*, owner-scoped."""
+    """Return memory records semantically relevant to *q* or *query*, owner-scoped."""
     user_id = _owner(current_user)
+    search_text = (q or query or "").strip()
+    if not search_text:
+        records = service.list_memories(
+            user_id=user_id,
+            project_id=project_id,
+            session_id=session_id,
+            content_type=content_type,
+            limit=k,
+        )
+        return {
+            "query": "",
+            "user_id": user_id,
+            "results": [r.__dict__ for r in records],
+            "total": len(records),
+        }
+
     results = service.retrieve_memories(
         user_id=user_id,
-        query=q,
+        query=search_text,
         k=k,
         project_id=project_id,
         session_id=session_id,
@@ -66,7 +83,7 @@ async def search_memory(
         verified_only=verified_only,
     )
     return {
-        "query": q,
+        "query": search_text,
         "user_id": user_id,
         "results": [r.__dict__ for r in results],
         "total": len(results),

@@ -22,7 +22,7 @@ import {
   FileDown, FileText, Files, FolderKanban, GitCompare, History, Loader2, LogOut,
   Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Plus,
   RefreshCw, Search, Send, Settings, ShieldCheck, Sun, Trash2, X, UploadCloud,
-  CheckCircle2, XCircle, ArrowUpRight, DollarSign, Cpu
+  CheckCircle2, XCircle, ArrowUpRight, DollarSign, Cpu, Eye, Download, Filter, Clock, Sparkles
 } from 'lucide-react';
 
 import { ReportViewer } from '../components/ReportViewer';
@@ -57,6 +57,12 @@ const asList = <T,>(d: unknown): T[] => {
 const normalizeSession = (raw: any): ResearchSession => {
   const id = raw?.id || raw?.session_id || raw?.research_id || '';
   const title = (raw?.title || raw?.topic || raw?.query || '').trim();
+  const sourcesCount = typeof raw?.sources_count === 'number'
+    ? raw.sources_count
+    : (Array.isArray(raw?.sources) ? raw.sources.length : (Array.isArray(raw?.search_results_raw) ? raw.search_results_raw.length : 0));
+  const claimsCount = typeof raw?.claims_count === 'number'
+    ? raw.claims_count
+    : (Array.isArray(raw?.claims) ? raw.claims.length : (Array.isArray(raw?.claim_verification_results) ? raw.claim_verification_results.length : 0));
   return {
     ...raw,
     id,
@@ -65,6 +71,9 @@ const normalizeSession = (raw: any): ResearchSession => {
     topic: raw?.topic || title,
     query: raw?.query || title,
     timestamp: raw?.timestamp || raw?.created_at,
+    sources_count: sourcesCount,
+    claims_count: claimsCount,
+    project_id: raw?.project_id || null,
   };
 };
 
@@ -320,7 +329,8 @@ const MAX_RETRIES = 5;
 export function useResearchStream(
   sessionId: string | undefined,
   enabled: boolean,
-  initialQuery?: string | null
+  initialQuery?: string | null,
+  initialMeta?: { query?: string; document_id?: string; project_id?: string } | null
 ) {
   const [events, setEvents] = useState<SSEMessage[]>([]);
   const [status, setStatus] = useState<StreamStatus>('idle');
@@ -366,7 +376,13 @@ export function useResearchStream(
         const url = initialQuery ? `${API_BASE}/research` : streamUrl(sessionId);
         const method = initialQuery ? 'POST' : 'GET';
         const body = initialQuery
-          ? { topic: initialQuery, research_id: sessionId, provider: 'gemini' }
+          ? {
+              topic: initialQuery,
+              research_id: sessionId,
+              provider: 'gemini',
+              project_id: initialMeta?.project_id || undefined,
+              document_id: initialMeta?.document_id || undefined,
+            }
           : undefined;
 
         await streamSSE(url, {
@@ -659,13 +675,15 @@ export function MessageContent({ content, onCite }: { content: string; onCite?: 
 export function ResearchComposer({ variant = 'hero', disabled, onSubmit, submitLabel }: {
   variant?: 'hero' | 'followup';
   disabled?: boolean;
-  onSubmit: (payload: { query: string; document_id?: string }) => Promise<void>;
+  onSubmit: (payload: { query: string; document_id?: string; project_id?: string }) => Promise<void>;
   submitLabel?: string;
 }) {
   const [query, setQuery] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [projectId, setProjectId] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { data: projects = [] } = useProjects();
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -674,9 +692,10 @@ export function ResearchComposer({ variant = 'hero', disabled, onSubmit, submitL
     if (ta) { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`; }
   }, [query]);
 
-  const uploadDocument = async (f: File): Promise<string> => {
+  const uploadDocument = async (f: File, pId?: string): Promise<string> => {
     const fd = new FormData();
     fd.append('file', f);
+    if (pId) fd.append('project_id', pId);
     const { data } = await api.post(API.documents.upload, fd);
     const id = (data as { id?: string; document_id?: string })?.id ?? (data as { id?: string; document_id?: string })?.document_id;
     if (!id) throw new Error('Upload succeeded but no document id returned.');
@@ -691,10 +710,10 @@ export function ResearchComposer({ variant = 'hero', disabled, onSubmit, submitL
     }
     setBusy(true);
     try {
-      const document_id = file ? await uploadDocument(file) : undefined;
+      const document_id = file ? await uploadDocument(file, projectId || undefined) : undefined;
       setFile(null);
       if (fileRef.current) fileRef.current.value = '';
-      await onSubmit({ query: query.trim(), document_id });
+      await onSubmit({ query: query.trim(), document_id, project_id: projectId || undefined });
       setQuery('');
     } catch (e) {
       setError(apiError(e));
@@ -719,7 +738,7 @@ export function ResearchComposer({ variant = 'hero', disabled, onSubmit, submitL
             : 'Ask a follow-up about this investigation…'}
           className="border-0 bg-transparent px-4 pt-4 focus:ring-0 text-[#F4EBDD]"
         />
-        <div className="flex items-center gap-2 px-3 pb-3">
+        <div className="flex flex-wrap items-center gap-2 px-3 pb-3">
           {hero && (
             <>
               <input ref={fileRef} type="file" hidden accept=".pdf,.docx,.txt,.md,.csv,.xlsx"
@@ -733,6 +752,24 @@ export function ResearchComposer({ variant = 'hero', disabled, onSubmit, submitL
                   <FileText className="mr-1 h-3 w-3" />{file.name}
                   <button onClick={() => setFile(null)}><X className="ml-1 h-3 w-3" /></button>
                 </Badge>
+              )}
+
+              {projects.length > 0 && (
+                <div className="inline-flex items-center gap-1.5 text-[12px] text-[#817463]">
+                  <FolderKanban className="h-3.5 w-3.5 text-[#C5A36A]" />
+                  <select
+                    value={projectId}
+                    onChange={(e) => setProjectId(e.target.value)}
+                    className="rounded border border-[#453322] bg-[#10100E] px-2 py-1 text-xs text-[#E9D6B6] focus:outline-none focus:border-[#C5A36A]"
+                  >
+                    <option value="">No Project (General)</option>
+                    {projects.map((p) => (
+                      <option key={p.project_id || p.id} value={p.project_id || p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               )}
             </>
           )}
@@ -1331,12 +1368,12 @@ function NewResearch() {
         Formulate a complex hypothesis or research question. Autonomous AI agents will plan, search, extract claims, verify evidence, and produce an intelligence report.
       </p>
       <ResearchComposer
-        onSubmit={async ({ query, document_id }) => {
+        onSubmit={async ({ query, document_id, project_id }) => {
           try {
             const sid = Array.from(crypto.getRandomValues(new Uint8Array(16)))
               .map((b) => b.toString(16).padStart(2, '0'))
               .join('');
-            sessionStorage.setItem(`pending_research_${sid}`, JSON.stringify({ query, document_id }));
+            sessionStorage.setItem(`pending_research_${sid}`, JSON.stringify({ query, document_id, project_id }));
             navigate(`/app/research/${sid}`);
           } catch (e) {
             toast.push(apiError(e), 'error');
@@ -1356,17 +1393,18 @@ function SessionView({ sessionId }: { sessionId: string }) {
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const [pendingQuery, setPendingQuery] = useState<string | null>(() => {
+  const [pendingMeta, setPendingMeta] = useState<{ query: string; document_id?: string; project_id?: string } | null>(() => {
     try {
       const raw = sessionStorage.getItem(`pending_research_${sessionId}`);
-      return raw ? JSON.parse(raw).query : null;
+      return raw ? JSON.parse(raw) : null;
     } catch (_) {
       return null;
     }
   });
 
+  const pendingQuery = pendingMeta?.query ?? null;
   const isActive = Boolean(pendingQuery) || (!!session && ACTIVE_STATUSES.has(String(session.status).toLowerCase()));
-  const { events, status, error: streamError, restart } = useResearchStream(sessionId, isActive, pendingQuery);
+  const { events, status, error: streamError, restart } = useResearchStream(sessionId, isActive, pendingQuery, pendingMeta);
   const [followUps, setFollowUps] = useState<Msg[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
   const [railTab, setRailTab] = useState<'sources' | 'evidence'>('sources');
@@ -1625,9 +1663,12 @@ function EvidencePanel({
 
 export function HistoryPage() {
   const { data: sessions = [], isLoading } = useSessions();
+  const { data: projects = [] } = useProjects();
   const { remove } = useSessionMutations();
   const navigate = useNavigate();
   const [q, setQ] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'completed' | 'in_progress' | 'failed'>('all');
+  const [projectFilter, setProjectFilter] = useState<string>('all');
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const isUntitled = (s: ResearchSession) => {
@@ -1635,43 +1676,150 @@ export function HistoryPage() {
     return !t || t === 'untitled' || t === 'untitled research' || t === 'unknown';
   };
 
+  const projectMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of projects) {
+      if (p.project_id) map.set(p.project_id, p.name);
+      if (p.id) map.set(p.id, p.name);
+    }
+    return map;
+  }, [projects]);
+
   const filtered = sessions
     .filter((s) => !isUntitled(s))
+    .filter((s) => {
+      if (statusFilter === 'all') return true;
+      const st = String(s.status || '').toLowerCase();
+      if (statusFilter === 'completed') return st === 'completed' || st === 'done';
+      if (statusFilter === 'in_progress') return st === 'running' || st === 'in_progress' || st === 'planning' || st === 'queued';
+      if (statusFilter === 'failed') return st === 'failed' || st === 'error';
+      return true;
+    })
+    .filter((s) => {
+      if (projectFilter === 'all') return true;
+      return s.project_id === projectFilter;
+    })
     .filter((s) => !q || (s.title ?? s.topic ?? s.query ?? '').toLowerCase().includes(q.toLowerCase()));
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
-      <h1 className="mb-5 font-serif text-2xl font-semibold text-[#E9D6B6]">Research History</h1>
-      <div className="mb-4">
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter previous investigations…" />
+    <div className="mx-auto max-w-5xl px-4 py-8">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+        <div>
+          <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Research History</h1>
+          <p className="text-xs text-[#817463]">Comprehensive log of all investigations, extracted claims, and generated reports.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {projects.length > 0 && (
+            <div className="flex items-center gap-1.5 rounded-lg border border-[#453322] bg-[#14110D] px-2.5 py-1 text-xs text-[#817463]">
+              <FolderKanban className="h-3.5 w-3.5 text-[#C5A36A]" />
+              <select
+                value={projectFilter}
+                onChange={(e) => setProjectFilter(e.target.value)}
+                className="bg-transparent text-[#E9D6B6] focus:outline-none"
+              >
+                <option value="all">All Projects</option>
+                {projects.map((p) => (
+                  <option key={p.project_id || p.id} value={p.project_id || p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-5">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#817463]" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search previous investigations…"
+            className="pl-9"
+          />
+        </div>
+        <div className="flex items-center rounded-lg border border-[#453322] bg-[#14110D] p-1 text-xs">
+          {(['all', 'completed', 'in_progress', 'failed'] as const).map((st) => (
+            <button
+              key={st}
+              onClick={() => setStatusFilter(st)}
+              className={cn(
+                'rounded-md px-3 py-1 font-medium capitalize transition-colors',
+                statusFilter === st ? 'bg-[#302319] text-[#E9D6B6]' : 'text-[#817463] hover:text-[#F4EBDD]'
+              )}
+            >
+              {st.replace('_', ' ')}
+            </button>
+          ))}
+        </div>
       </div>
 
       {isLoading ? (
         <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16" />)}</div>
       ) : filtered.length === 0 ? (
-        <EmptyState icon={<History className="h-6 w-6" />} title="No research sessions found" hint="Start an investigation from New Research." />
+        <EmptyState icon={<History className="h-6 w-6" />} title="No research sessions found" hint="Start an investigation from New Research or adjust your filters." />
       ) : (
         <ul className="divide-y divide-[#302319] rounded-xl border border-[#453322] bg-[#10100E]">
-          {filtered.map((s) => (
-            <li key={s.id}>
-              <button onClick={() => navigate(`/app/research/${s.id}`)}
-                className="group flex w-full items-center justify-between px-4 py-3.5 text-left hover:bg-[#1B1510]">
-                <div className="min-w-0 flex-1 pr-4">
-                  <p className="truncate text-[14.5px] font-medium text-[#F4EBDD]">{titleFromQuery(s.title || s.topic || s.query)}</p>
-                  <p className="mt-0.5 text-xs text-[#817463]">{fmtDate(s.created_at || s.timestamp)} · {s.sources_count ?? 0} sources · {s.claims_count ?? 0} claims</p>
-                </div>
-                <StatusBadge status={s.status} />
-                <button onClick={(e) => { e.stopPropagation(); setDeleteId(s.id); }} className="ml-3 text-[#817463] hover:text-red-400">
-                  <Trash2 className="h-4 w-4" />
+          {filtered.map((s) => {
+            const pName = s.project_id ? projectMap.get(s.project_id) : null;
+            return (
+              <li key={s.id}>
+                <button
+                  onClick={() => navigate(`/app/research/${s.id}`)}
+                  className="group flex w-full items-center justify-between px-4 py-3.5 text-left hover:bg-[#1B1510] transition-colors"
+                >
+                  <div className="min-w-0 flex-1 pr-4">
+                    <div className="flex items-center gap-2">
+                      <p className="truncate text-[14.5px] font-medium text-[#F4EBDD]">{titleFromQuery(s.title || s.topic || s.query)}</p>
+                      {pName && (
+                        <span className="inline-flex items-center gap-1 rounded bg-[#C5A36A]/10 px-1.5 py-0.5 text-[11px] font-mono text-[#C5A36A] border border-[#C5A36A]/20">
+                          <FolderKanban className="h-2.5 w-2.5" /> {pName}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#817463]">
+                      <span>{fmtDate(s.created_at || s.timestamp)}</span>
+                      <span>·</span>
+                      <span className="text-[#C5A36A] font-mono">{s.sources_count ?? 0} sources</span>
+                      <span>·</span>
+                      <span className="text-[#C5A36A] font-mono">{s.claims_count ?? 0} claims</span>
+                      {s.critic_score != null && (
+                        <>
+                          <span>·</span>
+                          <span className="font-mono text-[#C5A36A]">Score: {s.critic_score}/10</span>
+                        </>
+                      )}
+                      {s.provider && (
+                        <>
+                          <span>·</span>
+                          <span className="font-mono uppercase">{s.provider}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <StatusBadge status={s.status} />
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteId(s.id);
+                      }}
+                      className="p-1 text-[#817463] hover:text-red-400 transition-colors"
+                      title="Delete session"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </button>
-              </button>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
 
       <ConfirmDialog open={!!deleteId} onClose={() => setDeleteId(null)}
-        title="Delete Session" message="Delete this investigation and report?"
+        title="Delete Session" message="Delete this investigation and all generated claims and reports?"
         onConfirm={() => { if (deleteId) remove.mutate(deleteId, { onSuccess: () => setDeleteId(null) }); }} />
     </div>
   );
@@ -1778,13 +1926,31 @@ export function ReportEditorPage() {
 
 export function ProjectsPage() {
   const { data: projects = [], isLoading } = useProjects();
+  const { data: sessions = [] } = useSessions();
+  const { data: documents = [] } = useQuery<DocumentRecord[]>({
+    queryKey: ['documents'],
+    queryFn: async () => asList<DocumentRecord>((await api.get(API.documents.list)).data),
+  });
   const qc = useQueryClient();
   const toast = useToast();
+  const navigate = useNavigate();
+
+  // Create Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [domain, setDomain] = useState('general');
   const [busy, setBusy] = useState(false);
+
+  // Edit Modal
+  const [editProject, setEditProject] = useState<{ id: string; name: string; description: string } | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+
+  // Delete Confirm
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  // Details Modal
+  const [viewProject, setViewProject] = useState<Project | null>(null);
 
   const createProject = async (e: FormEvent) => {
     e.preventDefault();
@@ -1800,11 +1966,31 @@ export function ProjectsPage() {
     finally { setBusy(false); }
   };
 
+  const updateProject = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editProject || !editProject.name.trim()) return;
+    setEditBusy(true);
+    try {
+      await api.patch(API.projects.update(editProject.id), {
+        name: editProject.name.trim(),
+        description: editProject.description.trim() || null,
+      });
+      toast.push('Project updated.', 'success');
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      setEditProject(null);
+    } catch (err) { toast.push(apiError(err), 'error'); }
+    finally { setEditBusy(false); }
+  };
+
   const deleteProject = async (id: string) => {
     try {
       await api.delete(API.projects.delete(id));
       toast.push('Project deleted.', 'success');
       qc.invalidateQueries({ queryKey: ['projects'] });
+      if (viewProject && (viewProject.project_id === id || viewProject.id === id)) {
+        setViewProject(null);
+      }
+      setDeleteId(null);
     } catch (err) { toast.push(apiError(err), 'error'); }
   };
 
@@ -1813,7 +1999,7 @@ export function ProjectsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Research Projects</h1>
-          <p className="text-xs text-[#817463]">Multi-tenant project containers isolating investigations, documents, and vectors.</p>
+          <p className="text-xs text-[#817463]">Multi-tenant project containers isolating investigations, reference documents, and persistent memory.</p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setIsModalOpen(true)}>
           <Plus className="h-4 w-4" /> New Project
@@ -1821,27 +2007,158 @@ export function ProjectsPage() {
       </div>
 
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{[0, 1].map((i) => <Skeleton key={i} className="h-32" />)}</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{[0, 1].map((i) => <Skeleton key={i} className="h-36" />)}</div>
       ) : projects.length === 0 ? (
         <EmptyState icon={<FolderKanban className="h-6 w-6" />} title="No projects created yet" hint="Create a project to organize research sessions and reference documents." />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {projects.map((p) => (
-            <div key={p.project_id || p.id} className="rounded-xl border border-[#453322] bg-[#10100E] p-5 shadow-lg">
-              <div className="flex justify-between items-start mb-2">
-                <h3 className="font-serif text-lg font-semibold text-[#F3E9D7]">{p.name}</h3>
-                <StatusBadge status={p.status} />
+          {projects.map((p) => {
+            const pId = p.project_id || p.id || '';
+            const pSessions = sessions.filter((s) => s.project_id === pId);
+            const pDocs = documents.filter((d) => d.project_id === pId);
+
+            return (
+              <div
+                key={pId}
+                className="group relative rounded-xl border border-[#453322] bg-[#10100E] p-5 shadow-lg transition-all hover:border-[#C5A36A]/50 flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex justify-between items-start mb-2">
+                    <button
+                      onClick={() => setViewProject(p)}
+                      className="text-left font-serif text-lg font-semibold text-[#F3E9D7] hover:text-[#C5A36A] transition-colors"
+                    >
+                      {p.name}
+                    </button>
+                    <StatusBadge status={p.status} />
+                  </div>
+                  <p className="text-xs text-[#C0B19C] line-clamp-2 mb-4">{p.description || 'No description provided.'}</p>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-3 text-xs text-[#817463] mb-3">
+                    <span className="font-mono text-[#C5A36A]">{p.research_domain || 'general'}</span>
+                    <span>·</span>
+                    <span>{pSessions.length} session{pSessions.length === 1 ? '' : 's'}</span>
+                    <span>·</span>
+                    <span>{pDocs.length} doc{pDocs.length === 1 ? '' : 's'}</span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs border-t border-[#302319] pt-3">
+                    <button
+                      onClick={() => setViewProject(p)}
+                      className="inline-flex items-center gap-1 text-[#C5A36A] hover:underline"
+                    >
+                      <Eye className="h-3.5 w-3.5" /> View Container
+                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => setEditProject({ id: pId, name: p.name, description: p.description || '' })}
+                        className="text-[#817463] hover:text-[#F4EBDD]"
+                        title="Edit Project"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setDeleteId(pId)}
+                        className="text-red-400 hover:text-red-300"
+                        title="Delete Project"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <p className="text-xs text-[#C0B19C] line-clamp-2 mb-4">{p.description || 'No description provided.'}</p>
-              <div className="flex items-center justify-between text-xs text-[#817463] border-t border-[#302319] pt-3">
-                <span className="font-mono text-[#C5A36A]">{p.research_domain || 'general'}</span>
-                <button onClick={() => deleteProject(p.project_id || p.id!)} className="text-red-400 hover:underline">Delete</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
+      {/* View Project Details Modal */}
+      <Dialog open={!!viewProject} onClose={() => setViewProject(null)} title={viewProject?.name || 'Project Details'}>
+        {viewProject && (() => {
+          const pId = viewProject.project_id || viewProject.id || '';
+          const pSessions = sessions.filter((s) => s.project_id === pId);
+          const pDocs = documents.filter((d) => d.project_id === pId);
+
+          return (
+            <div className="space-y-5">
+              <div>
+                <p className="text-xs font-mono text-[#C5A36A] uppercase mb-1">{viewProject.research_domain || 'General'} Domain</p>
+                <p className="text-sm text-[#C0B19C]">{viewProject.description || 'No description provided.'}</p>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-mono uppercase tracking-wider text-[#817463]">Associated Investigations ({pSessions.length})</h4>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() => {
+                      setViewProject(null);
+                      navigate('/app/new');
+                    }}
+                  >
+                    <Plus className="h-3.5 w-3.5" /> New Investigation
+                  </Button>
+                </div>
+                {pSessions.length === 0 ? (
+                  <p className="text-xs text-[#817463] italic bg-[#14110D] p-3 rounded border border-[#302319]">
+                    No research sessions linked to this project container yet.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-[#302319] rounded-lg border border-[#302319] bg-[#14110D]">
+                    {pSessions.map((s) => (
+                      <li key={s.id} className="p-2.5 hover:bg-[#1B1510] flex justify-between items-center text-xs">
+                        <button
+                          onClick={() => {
+                            setViewProject(null);
+                            navigate(`/app/research/${s.id}`);
+                          }}
+                          className="font-medium text-[#F4EBDD] hover:text-[#C5A36A] truncate max-w-xs text-left"
+                        >
+                          {titleFromQuery(s.title || s.topic || s.query)}
+                        </button>
+                        <StatusBadge status={s.status} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div>
+                <h4 className="text-xs font-mono uppercase tracking-wider text-[#817463] mb-2">Associated Documents ({pDocs.length})</h4>
+                {pDocs.length === 0 ? (
+                  <p className="text-xs text-[#817463] italic bg-[#14110D] p-3 rounded border border-[#302319]">
+                    No reference documents uploaded to this container.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-[#302319] rounded-lg border border-[#302319] bg-[#14110D]">
+                    {pDocs.map((d) => (
+                      <li key={d.document_id || d.id} className="p-2.5 flex justify-between items-center text-xs text-[#C0B19C]">
+                        <span className="truncate max-w-xs flex items-center gap-1.5">
+                          <FileText className="h-3.5 w-3.5 text-[#C5A36A]" /> {d.original_filename}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[11px]">{(d.size_bytes / 1024).toFixed(1)} KB</span>
+                          <StatusBadge status={d.processing_status} />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="flex justify-end pt-2 border-t border-[#302319]">
+                <Button onClick={() => setViewProject(null)}>Close</Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Dialog>
+
+      {/* Create Project Modal */}
       <Dialog open={isModalOpen} onClose={() => setIsModalOpen(false)} title="Create Research Project">
         <form onSubmit={createProject} className="space-y-4">
           <div>
@@ -1867,6 +2184,35 @@ export function ProjectsPage() {
           </div>
         </form>
       </Dialog>
+
+      {/* Edit Project Modal */}
+      <Dialog open={!!editProject} onClose={() => setEditProject(null)} title="Edit Project Details">
+        {editProject && (
+          <form onSubmit={updateProject} className="space-y-4">
+            <div>
+              <label className="text-xs text-[#817463] mb-1 block">Project Name</label>
+              <Input required value={editProject.name} onChange={(e) => setEditProject({ ...editProject, name: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-xs text-[#817463] mb-1 block">Description</label>
+              <Textarea value={editProject.description} onChange={(e) => setEditProject({ ...editProject, description: e.target.value })} />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button onClick={() => setEditProject(null)}>Cancel</Button>
+              <Button variant="primary" type="submit" loading={editBusy}>Save Changes</Button>
+            </div>
+          </form>
+        )}
+      </Dialog>
+
+      {/* Delete Confirmation */}
+      <ConfirmDialog
+        open={!!deleteId}
+        onClose={() => setDeleteId(null)}
+        title="Delete Project Container"
+        message="Are you sure you want to delete this project? Associated research sessions will remain accessible under History."
+        onConfirm={() => { if (deleteId) deleteProject(deleteId); }}
+      />
     </div>
   );
 }
@@ -1878,13 +2224,29 @@ export function ProjectsPage() {
 export function DocumentsPage() {
   const qc = useQueryClient();
   const toast = useToast();
+  const { data: projects = [] } = useProjects();
   const { data: documents = [], isLoading } = useQuery<DocumentRecord[]>({
     queryKey: ['documents'],
     queryFn: async () => asList<DocumentRecord>((await api.get(API.documents.list)).data),
   });
 
+  const [searchQ, setSearchQ] = useState('');
+  const [projectFilter, setProjectFilter] = useState('all');
+  const [uploadProjectId, setUploadProjectId] = useState<string>('');
   const [uploading, setUploading] = useState(false);
+  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<DocumentRecord | null>(null);
+  const [deleteDocId, setDeleteDocId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const projectMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of projects) {
+      if (p.project_id) map.set(p.project_id, p.name);
+      if (p.id) map.set(p.id, p.name);
+    }
+    return map;
+  }, [projects]);
 
   const onUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -1892,12 +2254,18 @@ export function DocumentsPage() {
     setUploading(true);
     const fd = new FormData();
     fd.append('file', f);
+    if (uploadProjectId) {
+      fd.append('project_id', uploadProjectId);
+    }
     try {
       await api.post(API.documents.upload, fd);
       toast.push('Document uploaded. Parsing and embedding pipeline started.', 'success');
       qc.invalidateQueries({ queryKey: ['documents'] });
     } catch (err) { toast.push(apiError(err), 'error'); }
-    finally { setUploading(false); }
+    finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
   };
 
   const removeDoc = async (id: string) => {
@@ -1905,17 +2273,75 @@ export function DocumentsPage() {
       await api.delete(API.documents.delete(id));
       toast.push('Document removed.', 'success');
       qc.invalidateQueries({ queryKey: ['documents'] });
+      setDeleteDocId(null);
+      if (previewDoc && (previewDoc.document_id === id || previewDoc.id === id)) {
+        setPreviewDoc(null);
+      }
     } catch (err) { toast.push(apiError(err), 'error'); }
   };
 
+  const processDoc = async (id: string) => {
+    setProcessingId(id);
+    try {
+      await api.post(API.documents.process(id));
+      toast.push('Document text extracted, chunked, and indexed into ChromaDB.', 'success');
+      qc.invalidateQueries({ queryKey: ['documents'] });
+    } catch (err) {
+      toast.push(apiError(err), 'error');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const downloadDoc = async (id: string, filename: string) => {
+    try {
+      const token = getAccessToken();
+      const res = await fetch(`${API_BASE}/documents/${id}/download`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.push('Download started.', 'success');
+    } catch (e) {
+      toast.push(apiError(e), 'error');
+    }
+  };
+
+  const filtered = documents
+    .filter((d) => !searchQ || d.original_filename.toLowerCase().includes(searchQ.toLowerCase()))
+    .filter((d) => projectFilter === 'all' || d.project_id === projectFilter);
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Knowledge Documents</h1>
           <p className="text-xs text-[#817463]">Upload research papers, PDFs, DOCX, and texts to feed local RAG and vector embeddings.</p>
         </div>
-        <div>
+        <div className="flex items-center gap-2">
+          {projects.length > 0 && (
+            <select
+              value={uploadProjectId}
+              onChange={(e) => setUploadProjectId(e.target.value)}
+              className="rounded-lg border border-[#453322] bg-[#14110D] px-2.5 py-1.5 text-xs text-[#E9D6B6] focus:outline-none focus:border-[#C5A36A]"
+              title="Target project for upload"
+            >
+              <option value="">No Project (General)</option>
+              {projects.map((p) => (
+                <option key={p.project_id || p.id} value={p.project_id || p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
           <input ref={fileRef} type="file" hidden accept=".pdf,.docx,.txt,.md" onChange={onUpload} />
           <Button variant="primary" size="sm" loading={uploading} onClick={() => fileRef.current?.click()}>
             <UploadCloud className="h-4 w-4" /> Upload Document
@@ -1923,42 +2349,203 @@ export function DocumentsPage() {
         </div>
       </div>
 
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-5">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#817463]" />
+          <Input
+            value={searchQ}
+            onChange={(e) => setSearchQ(e.target.value)}
+            placeholder="Search documents by filename…"
+            className="pl-9"
+          />
+        </div>
+        {projects.length > 0 && (
+          <div className="flex items-center gap-1.5 rounded-lg border border-[#453322] bg-[#14110D] px-2.5 py-1.5 text-xs text-[#817463]">
+            <Filter className="h-3.5 w-3.5 text-[#C5A36A]" />
+            <select
+              value={projectFilter}
+              onChange={(e) => setProjectFilter(e.target.value)}
+              className="bg-transparent text-[#E9D6B6] focus:outline-none"
+            >
+              <option value="all">All Projects</option>
+              {projects.map((p) => (
+                <option key={p.project_id || p.id} value={p.project_id || p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
       {isLoading ? (
         <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16" />)}</div>
-      ) : documents.length === 0 ? (
-        <EmptyState icon={<Files className="h-6 w-6" />} title="No documents indexed" hint="Upload PDFs or text files to ground multi-agent queries in your local literature." />
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon={<Files className="h-6 w-6" />}
+          title={searchQ || projectFilter !== 'all' ? 'No matching documents' : 'No documents indexed'}
+          hint="Upload PDFs, DOCX, or text files to ground multi-agent queries in your local literature."
+        />
       ) : (
         <div className="rounded-xl border border-[#453322] bg-[#10100E] overflow-hidden shadow-lg">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-[#302319] bg-[#14110D] text-xs font-mono text-[#817463]">
               <tr>
                 <th className="p-3">File Name</th>
+                <th className="p-3">Project</th>
                 <th className="p-3">Size</th>
+                <th className="p-3">Chunks</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">Date</th>
                 <th className="p-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#302319] text-[#C0B19C]">
-              {documents.map((d) => (
-                <tr key={d.document_id || d.id}>
-                  <td className="p-3 font-medium text-[#F4EBDD] flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-[#C5A36A]" /> {d.original_filename}
-                  </td>
-                  <td className="p-3 font-mono text-xs">{(d.size_bytes / 1024).toFixed(1)} KB</td>
-                  <td className="p-3"><StatusBadge status={d.processing_status} /></td>
-                  <td className="p-3 text-xs">{fmtDate(d.created_at)}</td>
-                  <td className="p-3 text-right">
-                    <button onClick={() => removeDoc(d.document_id || d.id!)} className="text-red-400 text-xs hover:underline">
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((d) => {
+                const docId = d.document_id || d.id || '';
+                const pName = d.project_id ? projectMap.get(d.project_id) : null;
+                const isProcessing = processingId === docId;
+                const canProcess = d.processing_status === 'uploaded' || d.processing_status === 'failed';
+
+                return (
+                  <tr key={docId} className="hover:bg-[#1B1510] transition-colors">
+                    <td className="p-3 font-medium text-[#F4EBDD]">
+                      <button
+                        onClick={() => setPreviewDoc(d)}
+                        className="flex items-center gap-2 hover:text-[#C5A36A] text-left"
+                      >
+                        <FileText className="h-4 w-4 text-[#C5A36A] shrink-0" />
+                        <span className="truncate max-w-xs">{d.original_filename}</span>
+                      </button>
+                    </td>
+                    <td className="p-3 text-xs">
+                      {pName ? (
+                        <span className="inline-flex items-center gap-1 rounded bg-[#C5A36A]/10 px-1.5 py-0.5 font-mono text-[#C5A36A] border border-[#C5A36A]/20">
+                          <FolderKanban className="h-2.5 w-2.5" /> {pName}
+                        </span>
+                      ) : (
+                        <span className="text-[#817463]">—</span>
+                      )}
+                    </td>
+                    <td className="p-3 font-mono text-xs">{(d.size_bytes / 1024).toFixed(1)} KB</td>
+                    <td className="p-3 font-mono text-xs text-[#C5A36A]">{d.chunk_count ?? 0}</td>
+                    <td className="p-3">
+                      <StatusBadge status={d.processing_status} />
+                    </td>
+                    <td className="p-3 text-xs">{fmtDate(d.created_at)}</td>
+                    <td className="p-3 text-right">
+                      <div className="flex items-center justify-end gap-2 text-xs">
+                        {canProcess && (
+                          <button
+                            onClick={() => processDoc(docId)}
+                            disabled={isProcessing}
+                            className="inline-flex items-center gap-1 text-[#C5A36A] hover:underline"
+                            title="Extract text, chunk, and index into ChromaDB"
+                          >
+                            {isProcessing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                            Process
+                          </button>
+                        )}
+                        <button
+                          onClick={() => downloadDoc(docId, d.original_filename)}
+                          className="p-1 text-[#817463] hover:text-[#F4EBDD]"
+                          title="Download Document"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setPreviewDoc(d)}
+                          className="p-1 text-[#817463] hover:text-[#C5A36A]"
+                          title="View Details"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteDocId(docId)}
+                          className="p-1 text-red-400 hover:text-red-300"
+                          title="Delete Document"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
+
+      {/* Document Preview & Details Modal */}
+      <Dialog open={!!previewDoc} onClose={() => setPreviewDoc(null)} title={previewDoc?.original_filename || 'Document Details'}>
+        {previewDoc && (() => {
+          const docId = previewDoc.document_id || previewDoc.id || '';
+          const pName = previewDoc.project_id ? projectMap.get(previewDoc.project_id) : null;
+          return (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="rounded-lg border border-[#302319] bg-[#14110D] p-3">
+                  <span className="text-[#817463] block mb-1">MIME Type</span>
+                  <span className="font-mono text-[#F4EBDD]">{previewDoc.mime_type || 'application/octet-stream'}</span>
+                </div>
+                <div className="rounded-lg border border-[#302319] bg-[#14110D] p-3">
+                  <span className="text-[#817463] block mb-1">File Size</span>
+                  <span className="font-mono text-[#F4EBDD]">{(previewDoc.size_bytes / 1024).toFixed(2)} KB</span>
+                </div>
+                <div className="rounded-lg border border-[#302319] bg-[#14110D] p-3">
+                  <span className="text-[#817463] block mb-1">Indexed Vector Chunks</span>
+                  <span className="font-mono text-[#C5A36A] font-bold">{previewDoc.chunk_count ?? 0} chunks</span>
+                </div>
+                <div className="rounded-lg border border-[#302319] bg-[#14110D] p-3">
+                  <span className="text-[#817463] block mb-1">Processing Status</span>
+                  <StatusBadge status={previewDoc.processing_status} />
+                </div>
+              </div>
+
+              {pName && (
+                <div className="text-xs text-[#817463]">
+                  Project Container: <span className="font-mono text-[#C5A36A]">{pName}</span>
+                </div>
+              )}
+
+              {previewDoc.sha256 && (
+                <div className="text-xs text-[#817463]">
+                  <span className="block mb-1">SHA-256 Digest:</span>
+                  <code className="block rounded bg-[#14110D] p-2 font-mono text-[11px] text-[#C0B19C] break-all border border-[#302319]">
+                    {previewDoc.sha256}
+                  </code>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-[#302319]">
+                <Button onClick={() => setPreviewDoc(null)}>Close</Button>
+                {(previewDoc.processing_status === 'uploaded' || previewDoc.processing_status === 'failed') && (
+                  <Button
+                    variant="primary"
+                    loading={processingId === docId}
+                    onClick={() => processDoc(docId)}
+                  >
+                    <Sparkles className="h-4 w-4" /> Index Vector Embeddings
+                  </Button>
+                )}
+                <Button onClick={() => downloadDoc(docId, previewDoc.original_filename)}>
+                  <Download className="h-4 w-4" /> Download File
+                </Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Dialog>
+
+      {/* Delete Confirm */}
+      <ConfirmDialog
+        open={!!deleteDocId}
+        onClose={() => setDeleteDocId(null)}
+        title="Delete Document"
+        message="Are you sure you want to delete this document? Any associated vector embeddings in ChromaDB will also be purged."
+        onConfirm={() => { if (deleteDocId) removeDoc(deleteDocId); }}
+      />
     </div>
   );
 }
@@ -1969,27 +2556,161 @@ export function DocumentsPage() {
 
 export function ReviewCenterPage() {
   const toast = useToast();
-  const { data: reviews = [], isLoading } = useQuery({
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+
+  const { data: reviews = [], isLoading } = useQuery<any[]>({
     queryKey: ['reviews'],
-    queryFn: async () => asList<any>((await api.get('/reports/pending-reviews').catch(() => ({ data: [] }))).data),
+    queryFn: async () => {
+      try {
+        const res = await api.get('/reviews/pending');
+        return asList<any>(res.data);
+      } catch (_) {
+        const fallback = await api.get(API.review.reviews).catch(() => ({ data: [] }));
+        return asList<any>(fallback.data);
+      }
+    },
   });
+
+  const decidePlan = async (id: string, decision: 'approve' | 'reject' | 'modify') => {
+    setBusyAction(`plan-${id}-${decision}`);
+    try {
+      if (decision === 'approve') await api.post(API.review.approvePlan(id));
+      else if (decision === 'reject') await api.post(API.review.rejectPlan(id));
+      else await api.post(API.review.requestChanges(id), { notes: 'Analyst requested adjustments to research scope.' });
+      toast.push(`Research plan ${decision}d.`, 'success');
+      qc.invalidateQueries({ queryKey: ['reviews'] });
+    } catch (err) {
+      toast.push(apiError(err), 'error');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const decideReport = async (id: string, decision: 'approved' | 'rejected') => {
+    setBusyAction(`report-${id}-${decision}`);
+    try {
+      await api.post(API.review.reportDecision(id), { decision });
+      toast.push(`Report ${decision}.`, 'success');
+      qc.invalidateQueries({ queryKey: ['reviews'] });
+    } catch (err) {
+      toast.push(apiError(err), 'error');
+    } finally {
+      setBusyAction(null);
+    }
+  };
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
-      <div className="mb-6">
-        <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Human-in-the-Loop Review Center</h1>
-        <p className="text-xs text-[#817463]">Inspect research plans, verify extracted claims, and approve final synthesis reports.</p>
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Human-in-the-Loop Review Center</h1>
+          <p className="text-xs text-[#817463]">Inspect research plans, verify extracted claims, and approve final synthesis reports.</p>
+        </div>
+        <Badge className="border-[#C5A36A] text-[#E9D6B6]">
+          {reviews.length} Pending Review{reviews.length === 1 ? '' : 's'}
+        </Badge>
       </div>
 
       {isLoading ? (
-        <Spinner />
-      ) : (
-        <div className="rounded-xl border border-[#453322] bg-[#10100E] p-8 text-center">
+        <div className="space-y-3">{[0, 1].map((i) => <Skeleton key={i} className="h-28" />)}</div>
+      ) : reviews.length === 0 ? (
+        <div className="rounded-xl border border-[#453322] bg-[#10100E] p-10 text-center shadow-lg">
           <ShieldCheck className="mx-auto h-12 w-12 text-[#C5A36A] mb-3" />
           <h3 className="font-serif text-lg font-semibold text-[#F3E9D7]">All Review Queues Clear</h3>
-          <p className="text-sm text-[#817463] max-w-md mx-auto mt-2">
-            When research pipelines require plan approval or report review thresholds are active, sessions pause and appear here for human analyst validation.
+          <p className="text-sm text-[#817463] max-w-md mx-auto mt-2 leading-relaxed">
+            When research pipelines encounter confidence thresholds below safety requirements or human plan review is enabled, items pause execution and appear here for analyst authorization.
           </p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {reviews.map((r, i) => {
+            const isPlan = r.type === 'plan' || Boolean(r.plan_id);
+            const reviewId = r.id || r.plan_id || r.report_id || r.session_id || `rev-${i}`;
+            const targetSessionId = r.session_id || r.research_id;
+
+            return (
+              <div key={reviewId} className="rounded-xl border border-[#453322] bg-[#10100E] p-5 shadow-lg">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-[#C5A36A]/10 px-2 py-0.5 font-mono text-xs font-bold text-[#C5A36A] border border-[#C5A36A]/30 uppercase">
+                      {isPlan ? 'Plan Approval' : 'Report Decision'}
+                    </span>
+                    <h3 className="font-serif text-base font-semibold text-[#F4EBDD]">
+                      {r.title || r.query || 'Pending Research Item'}
+                    </h3>
+                  </div>
+                  {targetSessionId && (
+                    <button
+                      onClick={() => navigate(`/app/research/${targetSessionId}`)}
+                      className="inline-flex items-center gap-1 text-xs text-[#C5A36A] hover:underline"
+                    >
+                      Inspect Session <ArrowUpRight className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+
+                <p className="text-xs text-[#C0B19C] mb-4 leading-relaxed">
+                  {r.objective || r.description || r.summary || (isPlan ? 'Initial research plan formulating strategy and web retrieval criteria.' : 'Draft synthesis report awaiting final reviewer sign-off.')}
+                </p>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#302319] pt-3 text-xs">
+                  <span className="text-[#817463] font-mono">
+                    Created: {fmtDate(r.created_at)}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {isPlan ? (
+                      <>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          loading={busyAction === `plan-${reviewId}-approve`}
+                          onClick={() => decidePlan(reviewId, 'approve')}
+                        >
+                          <Check className="h-3.5 w-3.5" /> Approve Plan
+                        </Button>
+                        <Button
+                          size="sm"
+                          loading={busyAction === `plan-${reviewId}-modify`}
+                          onClick={() => decidePlan(reviewId, 'modify')}
+                        >
+                          Request Changes
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          loading={busyAction === `plan-${reviewId}-reject`}
+                          onClick={() => decidePlan(reviewId, 'reject')}
+                        >
+                          Reject
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          loading={busyAction === `report-${reviewId}-approved`}
+                          onClick={() => decideReport(reviewId, 'approved')}
+                        >
+                          <Check className="h-3.5 w-3.5" /> Approve Report
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          loading={busyAction === `report-${reviewId}-rejected`}
+                          onClick={() => decideReport(reviewId, 'rejected')}
+                        >
+                          Reject Report
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -2004,42 +2725,116 @@ export function KnowledgeBasePage() {
   const [q, setQ] = useState('');
   const [results, setResults] = useState<MemoryRecord[]>([]);
   const [busy, setBusy] = useState(false);
+  const [initialLoaded, setInitialLoaded] = useState(false);
+  const navigate = useNavigate();
 
-  const searchMemory = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!q.trim()) return;
+  const fetchMemories = useCallback(async (searchQuery = '') => {
     setBusy(true);
     try {
-      const { data } = await api.get<{ results?: MemoryRecord[] }>(`${API.memory.search}?query=${encodeURIComponent(q.trim())}`);
-      setResults(data?.results || []);
+      const url = searchQuery.trim()
+        ? `${API.memory.search}?q=${encodeURIComponent(searchQuery.trim())}`
+        : API.memory.search;
+      const { data } = await api.get<{ results?: MemoryRecord[]; memories?: MemoryRecord[] }>(url);
+      setResults(data?.results || data?.memories || asList<MemoryRecord>(data));
     } catch (_) {
       setResults([]);
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+      setInitialLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMemories();
+  }, [fetchMemories]);
+
+  const onSearch = (e: FormEvent) => {
+    e.preventDefault();
+    fetchMemories(q);
   };
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
-      <div className="mb-6">
-        <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Research Memory & Knowledge Base</h1>
-        <p className="text-xs text-[#817463]">Persistent cross-investigation memory vector store backed by ChromaDB and AES-256 isolation.</p>
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div>
+          <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Research Memory & Knowledge Base</h1>
+          <p className="text-xs text-[#817463]">Persistent cross-investigation memory vector store backed by ChromaDB and AES-256 isolation.</p>
+        </div>
+        {results.length > 0 && (
+          <span className="font-mono text-xs text-[#C5A36A]">
+            {results.length} Indexed Finding{results.length === 1 ? '' : 's'}
+          </span>
+        )}
       </div>
 
-      <form onSubmit={searchMemory} className="flex gap-2 mb-8">
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Semantic search across all past research findings and entities…" />
-        <Button variant="primary" type="submit" loading={busy}><Search className="h-4 w-4" /> Search</Button>
+      <form onSubmit={onSearch} className="flex gap-2 mb-8">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#817463]" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Semantic search across all past research findings, claims, and entities…"
+            className="pl-9"
+          />
+        </div>
+        <Button variant="primary" type="submit" loading={busy}>
+          <Search className="h-4 w-4" /> Search
+        </Button>
+        {q && (
+          <Button
+            onClick={() => {
+              setQ('');
+              fetchMemories('');
+            }}
+          >
+            Clear
+          </Button>
+        )}
       </form>
 
-      {results.length > 0 ? (
+      {busy && !initialLoaded ? (
+        <div className="space-y-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-24" />)}</div>
+      ) : results.length > 0 ? (
         <div className="space-y-3">
-          {results.map((r, i) => (
-            <div key={i} className="rounded-xl border border-[#453322] bg-[#10100E] p-4">
-              <h4 className="font-serif font-semibold text-[#E9D6B6] mb-1">{r.topic || r.query || 'Memory Finding'}</h4>
-              <p className="text-sm text-[#C0B19C]">{r.summary || r.content || JSON.stringify(r)}</p>
-            </div>
-          ))}
+          {results.map((r, i) => {
+            const memoryText = r.summary || r.content || (typeof r === 'string' ? r : JSON.stringify(r));
+            const sessionId = (r as any).session_id || (r as any).research_id;
+
+            return (
+              <div key={r.memory_id || r.id || i} className="rounded-xl border border-[#453322] bg-[#10100E] p-4 shadow-sm hover:border-[#C5A36A]/40 transition-colors">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <h4 className="font-serif font-semibold text-[#E9D6B6] text-sm">
+                    {r.topic || r.query || 'Research Finding'}
+                  </h4>
+                  {sessionId && (
+                    <button
+                      onClick={() => navigate(`/app/research/${sessionId}`)}
+                      className="inline-flex items-center gap-1 text-[11px] text-[#C5A36A] hover:underline"
+                    >
+                      View Investigation <ArrowUpRight className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-[#C0B19C] leading-relaxed mb-3">{memoryText}</p>
+                <div className="flex items-center gap-2 text-[11px] text-[#817463] font-mono border-t border-[#302319] pt-2">
+                  <span>ChromaDB Vector Store</span>
+                  {r.created_at && (
+                    <>
+                      <span>·</span>
+                      <span>{fmtDate(r.created_at)}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : (
-        <EmptyState icon={<Brain className="h-6 w-6" />} title="Search Cross-Session Memory" hint="Enter a topic or query to recall knowledge from previous investigations." />
+        <EmptyState
+          icon={<Brain className="h-6 w-6" />}
+          title={q ? 'No matching memory findings' : 'Knowledge Base Ready'}
+          hint={q ? 'Try searching for alternative topics or entities.' : 'As research investigations finish, verified claims and key findings are automatically ingested here.'}
+        />
       )}
     </div>
   );
@@ -2050,9 +2845,14 @@ export function KnowledgeBasePage() {
  * ============================================================ */
 
 export function ContradictionsPage() {
-  const { data: sessions = [] } = useSessions();
+  const { data: sessions = [], isLoading: sessionsLoading } = useSessions();
   const [selectedSession, setSelectedSession] = useState<string>('');
-  const [contradictions, setContradictions] = useState<ContradictionRecord[]>([]);
+  const [contradictionData, setContradictionData] = useState<{
+    status: string;
+    message?: string;
+    contradictions: ContradictionRecord[];
+    claims_evaluated?: number;
+  }>({ status: 'loading', contradictions: [] });
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -2064,39 +2864,112 @@ export function ContradictionsPage() {
   useEffect(() => {
     if (!selectedSession) return;
     setBusy(true);
-    api.get<{ contradictions?: ContradictionRecord[] }>(API.contradictions.bySession(selectedSession))
-      .then(({ data }) => setContradictions(data?.contradictions || []))
-      .catch(() => setContradictions([]))
+    api.get<{ status?: string; message?: string; contradictions?: ContradictionRecord[]; claims_evaluated?: number }>(
+      API.contradictions.bySession(selectedSession)
+    )
+      .then(({ data }) => {
+        setContradictionData({
+          status: data?.status || (data?.contradictions && data.contradictions.length > 0 ? 'completed' : 'no_contradictions'),
+          message: data?.message,
+          contradictions: data?.contradictions || [],
+          claims_evaluated: data?.claims_evaluated,
+        });
+      })
+      .catch(() => setContradictionData({ status: 'failed', contradictions: [] }))
       .finally(() => setBusy(false));
   }, [selectedSession]);
 
+  const activeSessionObj = sessions.find((s) => s.id === selectedSession);
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
-      <div className="mb-6 flex justify-between items-center">
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Contradiction Analysis</h1>
           <p className="text-xs text-[#817463]">Multi-source cross-examination detecting scientific and factual discrepancies.</p>
         </div>
-        <select value={selectedSession} onChange={(e) => setSelectedSession(e.target.value)}
-          className="rounded-lg border border-[#453322] bg-[#14110D] p-2 text-sm text-[#F4EBDD]">
-          {sessions.map((s) => <option key={s.id} value={s.id}>{titleFromQuery(s.title ?? s.query)}</option>)}
-        </select>
+        {sessions.length > 0 && (
+          <select
+            value={selectedSession}
+            onChange={(e) => setSelectedSession(e.target.value)}
+            className="rounded-lg border border-[#453322] bg-[#14110D] px-3 py-1.5 text-xs text-[#F4EBDD] focus:outline-none focus:border-[#C5A36A] max-w-xs truncate"
+          >
+            {sessions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {titleFromQuery(s.title ?? s.query)}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
-      {busy ? (
-        <Spinner />
-      ) : contradictions.length === 0 ? (
-        <EmptyState icon={<GitCompare className="h-6 w-6" />} title="No Contradictions Flagged" hint="The evidence in this session demonstrates alignment without unresolved disputes." />
+      {busy || sessionsLoading ? (
+        <div className="space-y-3">{[0, 1].map((i) => <Skeleton key={i} className="h-32" />)}</div>
+      ) : sessions.length === 0 ? (
+        <EmptyState icon={<GitCompare className="h-6 w-6" />} title="No research sessions found" hint="Start an investigation to evaluate claims and contradiction matrices." />
+      ) : contradictionData.status === 'no_claims' ? (
+        <EmptyState
+          icon={<GitCompare className="h-6 w-6" />}
+          title="No Claims Extracted Yet"
+          hint="This investigation has not extracted verifiable claims. Contradiction detection runs automatically once claims are retrieved."
+        />
+      ) : contradictionData.status === 'in_progress' ? (
+        <div className="rounded-xl border border-sky-500/40 bg-sky-500/10 p-8 text-center">
+          <Loader2 className="mx-auto h-8 w-8 animate-spin text-sky-400 mb-3" />
+          <h3 className="font-serif text-lg font-semibold text-sky-200">Contradiction Analysis In Progress</h3>
+          <p className="text-xs text-[#C0B19C] mt-2 max-w-md mx-auto">
+            Multi-agent cross-examination is actively comparing empirical claims against indexed sources.
+          </p>
+        </div>
+      ) : contradictionData.status === 'no_contradictions' || contradictionData.contradictions.length === 0 ? (
+        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-8 text-center shadow-lg">
+          <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-400 mb-3" />
+          <h3 className="font-serif text-lg font-semibold text-emerald-200">Empirical Alignment Verified</h3>
+          <p className="text-xs text-[#C0B19C] mt-2 max-w-md mx-auto leading-relaxed">
+            Cross-examination of {contradictionData.claims_evaluated ?? activeSessionObj?.claims_count ?? 'extracted'} claims confirms empirical consensus across all analyzed references with zero unresolved factual disputes flagged.
+          </p>
+        </div>
       ) : (
         <div className="space-y-4">
-          {contradictions.map((c) => (
-            <div key={c.contradiction_id} className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-5">
-              <div className="flex justify-between items-center mb-2">
-                <span className="font-mono text-xs text-amber-400 font-bold uppercase">{c.category}</span>
-                <Badge className="border-red-500/40 text-red-400">{c.severity} severity</Badge>
+          <div className="flex items-center justify-between text-xs text-[#817463]">
+            <span>{contradictionData.contradictions.length} Conflict{contradictionData.contradictions.length === 1 ? '' : 's'} Detected</span>
+            <span className="font-mono text-[#C5A36A]">{contradictionData.claims_evaluated ?? activeSessionObj?.claims_count ?? 0} claims evaluated</span>
+          </div>
+
+          {contradictionData.contradictions.map((c, i) => (
+            <div key={c.contradiction_id || i} className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-5 shadow-lg">
+              <div className="flex justify-between items-center mb-3">
+                <span className="font-mono text-xs text-amber-400 font-bold uppercase tracking-wider">
+                  {c.category || 'Empirical Discrepancy'}
+                </span>
+                <Badge className={cn('border-amber-500/40', c.severity === 'high' ? 'text-red-400 border-red-500/40' : 'text-amber-300')}>
+                  {c.severity || 'medium'} severity
+                </Badge>
               </div>
-              <p className="text-sm text-[#F4EBDD] font-medium mb-3">{c.description || 'Conflict detected between opposing empirical claims.'}</p>
-              {c.resolution_notes && <p className="text-xs text-[#C0B19C] bg-[#10100E] p-3 rounded border border-[#302319]">{c.resolution_notes}</p>}
+
+              <p className="text-sm text-[#F4EBDD] font-medium mb-3 leading-snug">
+                {c.description || 'Conflict detected between opposing empirical claims.'}
+              </p>
+
+              {(c.claim_a_id || c.claim_b_id) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3 text-xs">
+                  <div className="rounded-lg border border-[#302319] bg-[#10100E] p-3">
+                    <span className="font-mono text-[#817463] block mb-1">Perspective A:</span>
+                    <p className="text-[#C0B19C]">{c.claim_a_id}</p>
+                  </div>
+                  <div className="rounded-lg border border-[#302319] bg-[#10100E] p-3">
+                    <span className="font-mono text-[#817463] block mb-1">Perspective B:</span>
+                    <p className="text-[#C0B19C]">{c.claim_b_id}</p>
+                  </div>
+                </div>
+              )}
+
+              {c.resolution_notes && (
+                <div className="rounded-lg border border-[#302319] bg-[#10100E] p-3 text-xs text-[#C0B19C]">
+                  <span className="font-mono text-[#C5A36A] block mb-1">Synthesis & Reconciliation Guidance:</span>
+                  {c.resolution_notes}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -2115,6 +2988,11 @@ export function SystemStatusPage() {
     queryFn: async () => (await api.get(API.system.health)).data,
   });
 
+  const { data: dependencies, isLoading: depsLoading } = useQuery<any>({
+    queryKey: ['system-dependencies'],
+    queryFn: async () => (await api.get(API.system.dependencies)).data,
+  });
+
   const { data: providers } = useQuery<ProvidersResponse>({
     queryKey: ['system-providers'],
     queryFn: async () => (await api.get(API.system.providers)).data,
@@ -2125,6 +3003,8 @@ export function SystemStatusPage() {
     queryFn: async () => (await api.get(API.usage.summary)).data,
   });
 
+  const checks = dependencies?.checks || health?.checks || [];
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 space-y-6">
       <div>
@@ -2134,57 +3014,96 @@ export function SystemStatusPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="rounded-xl border border-[#453322] bg-[#10100E] p-4">
-          <p className="text-xs text-[#817463] mb-1">API Status</p>
+          <p className="text-xs text-[#817463] mb-1">API Core Status</p>
           <div className="flex items-center gap-2">
-            <span className={cn('h-3 w-3 rounded-full', health?.status === 'ok' ? 'bg-emerald-500' : 'bg-red-500')} />
-            <span className="font-serif font-bold text-lg text-[#F3E9D7]">{health?.status?.toUpperCase() || 'CONNECTING'}</span>
+            <span className={cn('h-3 w-3 rounded-full', (health?.status === 'ok' || dependencies?.status === 'ok') ? 'bg-emerald-500' : 'bg-red-500')} />
+            <span className="font-serif font-bold text-lg text-[#F3E9D7]">
+              {(dependencies?.status || health?.status || 'ONLINE').toUpperCase()}
+            </span>
           </div>
-          <p className="text-xs text-[#817463] mt-2">Uptime: {fmtDuration((health?.uptime_seconds || 0) * 1000)}</p>
+          <p className="text-xs text-[#817463] mt-2">
+            Uptime: {fmtDuration((health?.uptime_seconds || 0) * 1000)} · v{health?.version || '1.0.0'}
+          </p>
         </div>
 
         <div className="rounded-xl border border-[#453322] bg-[#10100E] p-4">
-          <p className="text-xs text-[#817463] mb-1">Default Provider</p>
+          <p className="text-xs text-[#817463] mb-1">Default Model Provider</p>
           <div className="flex items-center gap-2">
             <Cpu className="h-5 w-5 text-[#C5A36A]" />
-            <span className="font-mono font-bold text-lg text-[#E9D6B6]">{providers?.default?.toUpperCase() || 'GROQ'}</span>
+            <span className="font-mono font-bold text-lg text-[#E9D6B6]">
+              {providers?.default?.toUpperCase() || 'GEMINI'}
+            </span>
           </div>
-          <p className="text-xs text-[#817463] mt-2">{providers?.providers?.length || 4} configured fallbacks</p>
+          <p className="text-xs text-[#817463] mt-2">
+            {providers?.providers?.length || 4} configured fallback routing channels
+          </p>
         </div>
 
         <div className="rounded-xl border border-[#453322] bg-[#10100E] p-4">
-          <p className="text-xs text-[#817463] mb-1">Estimated Cost</p>
+          <p className="text-xs text-[#817463] mb-1">Usage & Telemetry</p>
           <div className="flex items-center gap-2">
             <DollarSign className="h-5 w-5 text-emerald-400" />
-            <span className="font-mono font-bold text-lg text-emerald-400">${(usage?.total_estimated_cost_usd || 0).toFixed(4)}</span>
+            <span className="font-mono font-bold text-lg text-emerald-400">
+              ${(usage?.total_estimated_cost_usd || 0).toFixed(4)}
+            </span>
           </div>
-          <p className="text-xs text-[#817463] mt-2">{usage?.total_tokens || 0} tokens processed</p>
+          <p className="text-xs text-[#817463] mt-2">
+            {usage?.total_tokens || 0} tokens processed across {usage?.total_requests || 0} runs
+          </p>
         </div>
       </div>
 
-      <div className="rounded-xl border border-[#453322] bg-[#10100E] p-5">
-        <h3 className="font-serif text-lg font-semibold text-[#E9D6B6] mb-3">Service Dependencies</h3>
-        <div className="divide-y divide-[#302319]">
-          {(health?.checks || [{ name: 'PostgreSQL Database', state: 'ok', duration_ms: 1.2 }, { name: 'ChromaDB Vector Store', state: 'ok', duration_ms: 2.4 }]).map((c, i) => (
-            <div key={i} className="flex justify-between items-center py-2.5 text-sm">
-              <span className="text-[#F4EBDD] font-medium">{c.name}</span>
-              <div className="flex items-center gap-3">
-                {c.duration_ms != null && <span className="font-mono text-xs text-[#817463]">{c.duration_ms.toFixed(1)}ms</span>}
-                <StatusBadge status={c.state} />
+      <div className="rounded-xl border border-[#453322] bg-[#10100E] p-5 shadow-lg">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-serif text-lg font-semibold text-[#E9D6B6]">Live Dependency Probes</h3>
+          <span className="text-xs font-mono text-[#817463]">Auto-refreshed</span>
+        </div>
+
+        {healthLoading && depsLoading ? (
+          <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-10" />)}</div>
+        ) : checks.length === 0 ? (
+          <div className="py-4 text-center text-xs text-[#817463]">All primary backend services operating normally.</div>
+        ) : (
+          <div className="divide-y divide-[#302319]">
+            {checks.map((c: any, i: number) => (
+              <div key={i} className="flex justify-between items-center py-2.5 text-sm">
+                <div>
+                  <span className="text-[#F4EBDD] font-medium">{c.name}</span>
+                  {c.detail && <p className="text-[11px] text-[#817463]">{c.detail}</p>}
+                </div>
+                <div className="flex items-center gap-3">
+                  {c.duration_ms != null && (
+                    <span className="font-mono text-xs text-[#817463]">{c.duration_ms.toFixed(1)}ms</span>
+                  )}
+                  <StatusBadge status={c.state || 'ok'} />
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="rounded-xl border border-[#453322] bg-[#10100E] p-5">
-        <h3 className="font-serif text-lg font-semibold text-[#E9D6B6] mb-3">Observability Dashboards</h3>
-        <p className="text-xs text-[#C0B19C] mb-4">Prometheus metrics are exposed at <code className="font-mono text-[#C5A36A]">/metrics</code> with OpenTelemetry trace correlation.</p>
-        <div className="flex gap-3">
-          <a href="http://127.0.0.1:8000/metrics" target="_blank" rel="noreferrer" className="btn small inline-flex items-center gap-1.5">
-            <ExternalLink className="h-3.5 w-3.5" /> Prometheus Metrics Endpoint
+      <div className="rounded-xl border border-[#453322] bg-[#10100E] p-5 shadow-lg">
+        <h3 className="font-serif text-lg font-semibold text-[#E9D6B6] mb-2">Observability & Telemetry Dashboards</h3>
+        <p className="text-xs text-[#C0B19C] mb-4">
+          Prometheus metrics and OpenAPI documentation are served directly by the FastAPI backend instance.
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <a
+            href={`${API_BASE}/metrics`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#453322] bg-[#14110D] px-3 py-2 text-xs font-medium text-[#E9D6B6] hover:bg-[#1B1510] hover:text-[#F4EBDD] transition-colors"
+          >
+            <ExternalLink className="h-3.5 w-3.5 text-[#C5A36A]" /> Prometheus Metrics Endpoint
           </a>
-          <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer" className="btn small inline-flex items-center gap-1.5">
-            <ExternalLink className="h-3.5 w-3.5" /> Swagger OpenAPI Docs
+          <a
+            href={`${API_BASE}/docs`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#453322] bg-[#14110D] px-3 py-2 text-xs font-medium text-[#E9D6B6] hover:bg-[#1B1510] hover:text-[#F4EBDD] transition-colors"
+          >
+            <ExternalLink className="h-3.5 w-3.5 text-[#C5A36A]" /> Swagger OpenAPI Docs
           </a>
         </div>
       </div>

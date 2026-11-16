@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Literal, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, Query, Response, UploadFile
 
 from app.errors import AuthenticationError
 from app.schemas.common import PaginationMeta
@@ -163,6 +163,43 @@ async def get_document_status(
     """Report the stored processing state and any recorded error."""
     row = service.status(document_id, _owner(current_user))
     return DocumentStatusResponse.model_validate(row)
+
+
+@router.get(
+    "/documents/{document_id}/download",
+    responses=_ERRORS,
+    summary="Download a stored document",
+)
+async def download_document(
+    document_id: str = DocumentIdPath,
+    current_user: dict = Depends(get_current_user),
+    service: DocumentService = Depends(get_document_service),
+) -> Response:
+    """Stream stored bytes for an owned document."""
+    data, row = service.download(document_id, _owner(current_user))
+    filename = row.get("original_filename", "document")
+    mime_type = row.get("mime_type", "application/octet-stream")
+    return Response(
+        content=data,
+        media_type=mime_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post(
+    "/documents/{document_id}/process",
+    response_model=DocumentRecord,
+    responses=_ERRORS,
+    summary="Retry extraction and vector indexing for a document",
+)
+async def process_document(
+    document_id: str = DocumentIdPath,
+    current_user: dict = Depends(get_current_user),
+    service: DocumentService = Depends(get_document_service),
+) -> DocumentRecord:
+    """Extract text from the document, chunk it, and index it into ChromaDB."""
+    row = service.process_document(document_id, _owner(current_user))
+    return DocumentRecord.model_validate(row)
 
 
 @router.delete(

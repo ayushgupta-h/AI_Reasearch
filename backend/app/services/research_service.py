@@ -232,6 +232,7 @@ class ResearchService:
         if not cancel_event.is_set():
             final_state["session_id"] = research_id
             final_state["topic"] = request.topic
+            final_state["project_id"] = getattr(request, "project_id", None)
             self._persist(
                 final_state=final_state,
                 user_id=user_id,
@@ -240,6 +241,27 @@ class ResearchService:
                 event_queue=event_queue,
             )
             self._register_report(final_state, user_id, research_id, request.topic)
+
+            # Ingest key claims into persistent memory for cross-investigation retrieval
+            if user_id:
+                try:
+                    from app.services.research_memory_service import ResearchMemoryService
+                    mem_svc = ResearchMemoryService()
+                    claims = final_state.get("claims") or final_state.get("claim_verification_results") or []
+                    for c in claims[:8]:
+                        txt = (c.get("text") or c.get("claim_text") or c.get("conclusion") or "") if isinstance(c, dict) else str(c)
+                        if txt and len(txt) > 20:
+                            v_status = c.get("status") or c.get("verification_status") or "verified" if isinstance(c, dict) else "verified"
+                            mem_svc.store_memory(
+                                user_id=user_id,
+                                content=txt,
+                                content_type="claim",
+                                verification_status=str(v_status),
+                                project_id=getattr(request, "project_id", None),
+                                session_id=research_id,
+                            )
+                except Exception as exc:
+                    logger.warning(f"Research memory ingestion deferred: {exc}")
 
         duration = round(time.perf_counter() - started, 1)
         critic_score = final_state.get("critic_score")
@@ -328,6 +350,7 @@ class ResearchService:
                     "topic": request.topic,
                     "status": "running",
                     "provider": request.provider,
+                    "project_id": getattr(request, "project_id", None),
                 },
                 user_id=user_id,
             )

@@ -87,7 +87,9 @@ CREATE TABLE IF NOT EXISTS research_sessions (
     user_id             TEXT,
     sources_json        TEXT,
     claims_json         TEXT,
-    report_content      TEXT
+    report_content      TEXT,
+    project_id          TEXT,
+    contradictions_json TEXT
 );
 """
 
@@ -96,12 +98,12 @@ INSERT INTO research_sessions (
     session_id, topic, timestamp, provider, critic_score,
     revision_count, status, saved_report_path, docx_path, pdf_path,
     citations_verified, citations_total, duration_seconds, notes, user_id,
-    sources_json, claims_json, report_content
+    sources_json, claims_json, report_content, project_id, contradictions_json
 ) VALUES (
     :session_id, :topic, :timestamp, :provider, :critic_score,
     :revision_count, :status, :saved_report_path, :docx_path, :pdf_path,
     :citations_verified, :citations_total, :duration_seconds, :notes, :user_id,
-    :sources_json, :claims_json, :report_content
+    :sources_json, :claims_json, :report_content, :project_id, :contradictions_json
 )
 ON CONFLICT(session_id) DO UPDATE SET
     topic = excluded.topic,
@@ -120,13 +122,16 @@ ON CONFLICT(session_id) DO UPDATE SET
     user_id = excluded.user_id,
     sources_json = excluded.sources_json,
     claims_json = excluded.claims_json,
-    report_content = excluded.report_content;
+    report_content = excluded.report_content,
+    project_id = excluded.project_id,
+    contradictions_json = excluded.contradictions_json;
 """
 
 _SELECT_ALL_SQL = """
 SELECT session_id, topic, timestamp, provider, critic_score,
        revision_count, status, saved_report_path,
-       citations_verified, citations_total, duration_seconds, user_id
+       citations_verified, citations_total, duration_seconds, user_id,
+       project_id, sources_json, claims_json, contradictions_json
 FROM research_sessions
 ORDER BY timestamp DESC;
 """
@@ -134,7 +139,8 @@ ORDER BY timestamp DESC;
 _SELECT_BY_USER_SQL = """
 SELECT session_id, topic, timestamp, provider, critic_score,
        revision_count, status, saved_report_path,
-       citations_verified, citations_total, duration_seconds, user_id
+       citations_verified, citations_total, duration_seconds, user_id,
+       project_id, sources_json, claims_json, contradictions_json
 FROM research_sessions
 WHERE user_id = ?
 ORDER BY timestamp DESC;
@@ -180,7 +186,7 @@ class SessionManager:
             conn.execute(_CREATE_TABLE_SQL)
             # Automatic schema migration: ensure new columns exist
             cols = [col[1] for col in conn.execute("PRAGMA table_info(research_sessions)").fetchall()]
-            for col_name in ["user_id", "sources_json", "claims_json", "report_content"]:
+            for col_name in ["user_id", "sources_json", "claims_json", "report_content", "project_id", "contradictions_json"]:
                 if col_name not in cols:
                     try:
                         conn.execute(f"ALTER TABLE research_sessions ADD COLUMN {col_name} TEXT")
@@ -244,13 +250,16 @@ class SessionManager:
                 if m:
                     pdf_path = m.group(1).strip()
 
-        # Serialize sources, claims, and report content
+        # Serialize sources, claims, contradictions, and report content
         sources = final_state.get("search_results_raw") or final_state.get("sources") or []
         claims = final_state.get("claims") or final_state.get("claim_verification_results") or []
+        contradictions = final_state.get("contradictions") or []
+        project_id = final_state.get("project_id") or req_data.get("project_id")
         report_content = str(final_state.get("report_content") or final_state.get("final_report") or final_state.get("report") or "")
 
         sources_json = json.dumps(sources) if isinstance(sources, (list, dict)) else str(sources or "")
         claims_json = json.dumps(claims) if isinstance(claims, (list, dict)) else str(claims or "")
+        contradictions_json = json.dumps(contradictions) if isinstance(contradictions, (list, dict)) else str(contradictions or "")
 
         row = {
             "session_id": session_id,
@@ -271,6 +280,8 @@ class SessionManager:
             "sources_json": sources_json,
             "claims_json": claims_json,
             "report_content": report_content,
+            "project_id": project_id,
+            "contradictions_json": contradictions_json,
         }
 
         with self._connect() as conn:
@@ -290,7 +301,27 @@ class SessionManager:
                 rows = conn.execute(_SELECT_BY_USER_SQL, (user_id,)).fetchall()
             else:
                 rows = conn.execute(_SELECT_ALL_SQL).fetchall()
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            d = dict(r)
+            s_count = 0
+            if d.get("sources_json"):
+                try:
+                    s_list = json.loads(d["sources_json"])
+                    s_count = len(s_list) if isinstance(s_list, list) else 0
+                except Exception:
+                    pass
+            c_count = 0
+            if d.get("claims_json"):
+                try:
+                    c_list = json.loads(d["claims_json"])
+                    c_count = len(c_list) if isinstance(c_list, list) else 0
+                except Exception:
+                    pass
+            d["sources_count"] = s_count
+            d["claims_count"] = c_count
+            result.append(d)
+        return result
 
     def get_session(self, session_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Return a single session record by its full UUID, or None if not found or unauthorized."""
@@ -302,17 +333,30 @@ class SessionManager:
         if user_id and rec.get("user_id") and rec.get("user_id") != user_id:
             return None
 
-        # Parse sources and claims JSON
+        # Parse sources, claims, and contradictions JSON
+        s_count = 0
         if rec.get("sources_json"):
             try:
                 rec["search_results_raw"] = rec["sources"] = json.loads(rec["sources_json"])
+                if isinstance(rec["sources"], list):
+                    s_count = len(rec["sources"])
             except Exception:
                 pass
+        c_count = 0
         if rec.get("claims_json"):
             try:
                 rec["claims"] = rec["claim_verification_results"] = json.loads(rec["claims_json"])
+                if isinstance(rec["claims"], list):
+                    c_count = len(rec["claims"])
             except Exception:
                 pass
+        if rec.get("contradictions_json"):
+            try:
+                rec["contradictions"] = json.loads(rec["contradictions_json"])
+            except Exception:
+                pass
+        rec["sources_count"] = s_count
+        rec["claims_count"] = c_count
 
         # Ensure report / content is populated and stripped of raw metadata/debug appendices
         raw_content = rec.get("report_content")

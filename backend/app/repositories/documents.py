@@ -45,7 +45,7 @@ _CREATE_INDEX = (
 _COLUMNS = (
     "document_id, owner_id, project_id, research_id, original_filename, "
     "mime_type, size_bytes, sha256, storage_key, processing_status, "
-    "error_code, error_message, created_at, updated_at"
+    "error_code, error_message, chunk_count, created_at, updated_at"
 )
 
 _SORTS = {
@@ -70,6 +70,12 @@ class DocumentRepository:
                 return
             self._db.execute(_CREATE_DOCUMENTS)
             self._db.execute(_CREATE_INDEX)
+            try:
+                cols = [col[1] for col in self._db.fetch_all("PRAGMA table_info(documents)")]
+                if "chunk_count" not in cols:
+                    self._db.execute("ALTER TABLE documents ADD COLUMN chunk_count INTEGER DEFAULT 0")
+            except Exception:
+                pass
             self._schema_ready = True
 
     def create(
@@ -210,6 +216,13 @@ class DocumentRepository:
                 document_id,
                 owner_id,
             ),
+        )
+
+    def update_chunk_count(self, document_id: str, owner_id: str, chunk_count: int) -> None:
+        self.ensure_schema()
+        self._db.execute(
+            "UPDATE documents SET chunk_count = ?, updated_at = ? WHERE document_id = ? AND owner_id = ?",
+            (chunk_count, utc_iso(), document_id, owner_id),
         )
 
     def delete(self, document_id: str, owner_id: str) -> bool:

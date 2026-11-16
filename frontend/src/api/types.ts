@@ -116,6 +116,7 @@ export interface DocumentRecord {
   size_bytes: number;
   sha256: string;
   processing_status: 'uploaded' | 'pending' | 'extracting' | 'chunking' | 'embedding' | 'indexed' | 'failed';
+  chunk_count?: number;
   error_message?: string | null;
   created_at: UtcDatetime;
   updated_at: UtcDatetime;

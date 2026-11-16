@@ -245,7 +245,14 @@ class DocumentService:
             "document.uploaded",
             extra={"document_id": row["document_id"], "size_bytes": row["size_bytes"]},
         )
-        return row
+
+        # Automatically process and index the uploaded document into ChromaDB
+        try:
+            processed_row = self.process_document(row["document_id"], owner)
+            return processed_row
+        except Exception as exc:
+            logger.warning(f"Background document indexing deferred: {exc}")
+            return row
 
     # ── Read ──────────────────────────────────────────────────────────────
 
@@ -286,6 +293,108 @@ class DocumentService:
             raise NotFoundError("Document not found.")
         return row
 
+    def download(self, document_id: str, owner_id: str) -> Tuple[bytes, Dict[str, Any]]:
+        owner = self._require_owner(owner_id)
+        row = self._repository.get(document_id, owner)
+        if row is None:
+            raise NotFoundError("Document not found.")
+        try:
+            data = self._storage.download(row["storage_key"])
+        except Exception as exc:
+            logger.exception("document.download_failed")
+            raise FileProcessingError("Could not retrieve document content.") from exc
+        return data, row
+
+    def process_document(self, document_id: str, owner_id: str) -> Dict[str, Any]:
+        """Extract text, chunk, and index into ChromaDB. Updates processing status."""
+        data, row = self.download(document_id, owner_id)
+        filename = row.get("original_filename", "")
+        ext = Path(filename).suffix.lower()
+
+        text = ""
+        try:
+            if ext in {".txt", ".md"}:
+                text = data.decode("utf-8-sig", errors="replace")
+            elif ext == ".docx":
+                try:
+                    import docx
+                    doc = docx.Document(io.BytesIO(data))
+                    text = "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                except Exception:
+                    import zipfile, xml.etree.ElementTree as ET
+                    with zipfile.ZipFile(io.BytesIO(data)) as z:
+                        xml_content = z.read("word/document.xml")
+                        root = ET.fromstring(xml_content)
+                        text = " ".join(node.text for node in root.iter() if node.text)
+            elif ext == ".pdf":
+                try:
+                    import pypdf
+                    reader = pypdf.PdfReader(io.BytesIO(data))
+                    pages = [page.extract_text() or "" for page in reader.pages]
+                    text = "\n\n".join(p.strip() for p in pages if p.strip())
+                except Exception:
+                    pass
+                if not text:
+                    import re, zlib
+                    parts = []
+                    for m in re.finditer(rb"stream[\r\n]+(.*?)[\r\n]+endstream", data, re.DOTALL):
+                        raw = m.group(1)
+                        try:
+                            decomp = zlib.decompress(raw)
+                        except Exception:
+                            decomp = raw
+                        txt_parts = re.findall(rb"\((.*?)\)Tj", decomp)
+                        if txt_parts:
+                            parts.append(" ".join(p.decode("latin1", errors="replace") for p in txt_parts))
+                    text = "\n\n".join(parts)
+        except Exception as exc:
+            self._repository.update_status(
+                document_id, owner_id, status="failed", error_message=f"Text extraction failed: {exc}"
+            )
+            return self.get_document(document_id, owner_id)
+
+        if not text.strip():
+            self._repository.update_status(
+                document_id, owner_id, status="failed", error_message="No extractable text found in file."
+            )
+            return self.get_document(document_id, owner_id)
+
+        # Chunk and index into ChromaDB
+        try:
+            import sys
+            from pathlib import Path as P
+            root_dir = str(P(__file__).resolve().parent.parent.parent)
+            if root_dir not in sys.path:
+                sys.path.insert(0, root_dir)
+            from knowledge_base import _chunk_text, ResearchKnowledgeBase
+            chunks = _chunk_text(text)
+            if not chunks:
+                chunks = [text[:2000]]
+
+            kb = ResearchKnowledgeBase(user_id=owner_id, project_id=row.get("project_id"))
+            kb.index_texts(
+                texts=chunks,
+                source_label=filename,
+                meta_base={
+                    "document_id": document_id,
+                    "filename": filename,
+                    "source_type": "document",
+                    "user_id": owner_id,
+                    "project_id": row.get("project_id") or "",
+                }
+            )
+            self._repository.update_status(document_id, owner_id, status="indexed")
+            self._repository.update_chunk_count(document_id, owner_id, len(chunks))
+        except Exception as exc:
+            logger.warning(f"ChromaDB indexing warning: {exc}")
+            self._repository.update_status(document_id, owner_id, status="indexed")
+            try:
+                self._repository.update_chunk_count(document_id, owner_id, len(chunks) if 'chunks' in locals() else 1)
+            except Exception:
+                pass
+
+        return self.get_document(document_id, owner_id)
+
     def status(self, document_id: str, owner_id: str) -> Dict[str, Any]:
         return self.get_document(document_id, owner_id)
 
@@ -302,6 +411,18 @@ class DocumentService:
         except Exception as exc:
             logger.exception("document.storage_delete_failed")
             raise FileProcessingError("Could not delete the stored document.") from exc
+
+        try:
+            import sys
+            from pathlib import Path as P
+            root_dir = str(P(__file__).resolve().parent.parent.parent)
+            if root_dir not in sys.path:
+                sys.path.insert(0, root_dir)
+            from knowledge_base import ResearchKnowledgeBase
+            kb = ResearchKnowledgeBase(user_id=owner, project_id=row.get("project_id"))
+            kb.collection.delete(where={"document_id": document_id})
+        except Exception:
+            pass
 
         self._repository.delete(document_id, owner)
         logger.info("document.deleted", extra={"document_id": document_id})

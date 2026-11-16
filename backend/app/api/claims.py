@@ -150,26 +150,90 @@ async def list_contradictions(
     research_id: str = ResearchIdPath,
     current_user: Optional[dict] = Depends(get_optional_user),
     contradiction_repo=Depends(get_contradiction_repository),
+    session_service: SessionService = Depends(get_session_service),
 ) -> dict:
     """Return all contradictions detected between claims in this session."""
+    user_id = current_user.get("user_id") if current_user else None
+
+    # 1. Try PostgreSQL repository if available
     repo_available = contradiction_repo is not None and getattr(contradiction_repo, "available", False)
-    if not repo_available:
+    if repo_available:
+        try:
+            items = contradiction_repo.list_for_session(research_id)
+            if items:
+                return {
+                    "research_id": research_id,
+                    "contradictions": items,
+                    "total": len(items),
+                    "status": "completed",
+                }
+        except Exception:
+            pass
+
+    # 2. Check session from SessionService / SQLite
+    try:
+        session = session_service.get_session(research_id, user_id=user_id)
+    except Exception:
+        session = None
+
+    if not session:
         return {
             "research_id": research_id,
             "contradictions": [],
             "total": 0,
-            "message": "Contradiction analysis requires PostgreSQL persistence.",
+            "status": "not_executed",
+            "message": "Research session not found.",
+        }
+
+    # Check stored contradictions
+    stored_contradictions = session.get("contradictions")
+    if stored_contradictions and isinstance(stored_contradictions, list):
+        return {
+            "research_id": research_id,
+            "contradictions": stored_contradictions,
+            "total": len(stored_contradictions),
+            "status": "completed" if len(stored_contradictions) > 0 else "no_contradictions",
+        }
+
+    # If claims exist in the session, run ContradictionDetectionService
+    claims = session.get("claims") or session.get("claim_verification_results") or []
+    if not claims:
+        sess_status = (session.get("status") or "").lower()
+        if sess_status in ("running", "in_progress", "pending"):
+            return {
+                "research_id": research_id,
+                "contradictions": [],
+                "total": 0,
+                "status": "in_progress",
+                "message": "Analysis in progress. Claims are still being extracted.",
+            }
+        return {
+            "research_id": research_id,
+            "contradictions": [],
+            "total": 0,
+            "status": "no_claims",
+            "message": "No empirical claims were extracted for this session.",
         }
 
     try:
-        items = contradiction_repo.list_for_session(research_id)
-    except Exception:
-        items = []
-    return {
-        "research_id": research_id,
-        "contradictions": items,
-        "total": len(items),
-    }
+        from app.services.contradiction_detection import ContradictionDetectionService
+        detector = ContradictionDetectionService()
+        analyses = detector.detect(claims)
+        contradiction_list = [a.model_dump(mode="json") for a in analyses]
+        return {
+            "research_id": research_id,
+            "contradictions": contradiction_list,
+            "total": len(contradiction_list),
+            "status": "completed" if len(contradiction_list) > 0 else "no_contradictions",
+        }
+    except Exception as exc:
+        return {
+            "research_id": research_id,
+            "contradictions": [],
+            "total": 0,
+            "status": "failed",
+            "message": f"Contradiction detection failed: {exc}",
+        }
 
 
 __all__ = ["router"]
