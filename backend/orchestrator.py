@@ -692,26 +692,66 @@ class MultiAgentOrchestrator:
                 "status": "reader_completed",
             }
 
-        url_list_str = "\n".join(f"  {i}. {u}" for i, u in enumerate(top_urls[:8], 1))
-
+        extracted = ""
         try:
-            reader_result = self.reader_agent.invoke({
-                "messages": [("user",
-                    f"Research topic: '{refined_query}'\n\n"
-                    f"Select the 2-3 most authoritative and content-rich URLs from the list below and scrape them "
-                    f"to extract key data, statistics, technical architecture, and factual findings:\n\n"
-                    f"Available URLs:\n{url_list_str}\n\n"
-                    f"Context:\n{search_results[:1800]}"
-                )]
-            })
-            extracted = reader_result["messages"][-1].content
-            # Some LLM providers (e.g. Gemini) return content as a list of
-            # blocks instead of a plain string — normalise before use.
-            if isinstance(extracted, list):
-                extracted = "\n".join(
-                    (b.get("text") if isinstance(b, dict) and b.get("text") else str(b))
-                    for b in extracted
-                )
+            import concurrent.futures
+            import requests
+            from bs4 import BeautifulSoup
+
+            # Fast parallel scraping of top candidate URLs with strict 5-second per-URL timeout
+            scraped_items: List[str] = []
+            valid_urls = [u for u in top_urls if isinstance(u, str) and u.startswith("http")][:4]
+
+            def _scrape_page(u: str) -> Optional[str]:
+                try:
+                    resp = requests.get(
+                        u,
+                        timeout=5,
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+                    )
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, "html.parser")
+                        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
+                            tag.decompose()
+                        body_text = soup.get_text(separator=" ", strip=True)
+                        if len(body_text) > 80:
+                            return f"Source: {u}\nContent:\n{body_text[:2200]}"
+                except Exception:
+                    pass
+                return None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                futures = {pool.submit(_scrape_page, u): u for u in valid_urls}
+                done_futs, _ = concurrent.futures.wait(futures.keys(), timeout=9)
+                for f in done_futs:
+                    txt = f.result()
+                    if txt:
+                        scraped_items.append(txt)
+
+            if scraped_items:
+                combined_scraped = "\n\n---\n\n".join(scraped_items)
+                console.print(f"  [cyan]Scraped {len(scraped_items)} URLs successfully in parallel.[/cyan]")
+                # Single-pass fast LLM extraction for key facts and statistics
+                try:
+                    prompt = (
+                        f"Research topic: '{refined_query}'\n\n"
+                        f"Extract key data, technical mechanisms, statistics, and factual findings from these authoritative pages:\n\n"
+                        f"{combined_scraped[:6000]}"
+                    )
+                    res = self.llm.invoke(prompt)
+                    raw_extracted = getattr(res, "content", str(res))
+                    if isinstance(raw_extracted, list):
+                        extracted = "\n".join(
+                            (b.get("text") if isinstance(b, dict) and b.get("text") else str(b))
+                            for b in raw_extracted
+                        )
+                    else:
+                        extracted = str(raw_extracted)
+                except Exception:
+                    extracted = combined_scraped[:4000]
+            else:
+                console.print("  [yellow]No external pages returned readable content. Using search snippets.[/yellow]")
+                extracted = f"Primary search snippets summary: {search_results[:3000]}"
         except Exception as e:
             console.print(f"  [dim red]⚠ Reader Agent fallback triggered: {e}[/dim red]")
             extracted = f"Direct search snippets summary (Scraping agent skipped): {search_results[:3000]}"

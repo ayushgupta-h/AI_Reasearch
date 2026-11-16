@@ -74,9 +74,22 @@ def _get_embeddings():
     Return a LangChain-compatible embeddings object.
 
     Priority:
-      1. HuggingFaceEmbeddings (sentence-transformers, local, best quality)
-      2. FakeEmbeddings (zero-dep fallback, random vectors — for CI / testing)
+      1. GoogleGenerativeAIEmbeddings (fast API call, no memory footprint on cloud containers)
+      2. HuggingFaceEmbeddings (sentence-transformers, local fallback)
+      3. FakeEmbeddings (zero-dep fallback, random vectors — for CI / testing)
     """
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if gemini_key:
+        try:
+            from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
+            console.print("  [dim]🔢 Using Google Gemini Embeddings API (text-embedding-004)...[/dim]")
+            return GoogleGenerativeAIEmbeddings(
+                model="models/text-embedding-004",
+                google_api_key=gemini_key,
+            )
+        except Exception as e:
+            console.print(f"  [yellow]⚠ Gemini embeddings failed ({e}). Falling back to local embeddings...[/yellow]")
+
     try:
         from langchain_huggingface import HuggingFaceEmbeddings  # type: ignore
         console.print(

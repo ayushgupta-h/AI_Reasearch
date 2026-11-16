@@ -1,0 +1,12 @@
+// Supabase Client Environment Variables for Quest Frontend
+window.__ENV__ = window.__ENV__ || {
+  SUPABASE_URL: "https://vxqalflbzpjkvmtbbqrv.supabase.co",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ4cWFsZmxienBqa3ZtdGJicXJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3ODQyNzgsImV4cCI6MjA5MzM2MDI3OH0.Itqr5hTJLCULhkQr_pc6qg0h0dTWkJbb2CRdChCN5h4",
+  VITE_SUPABASE_URL: "https://vxqalflbzpjkvmtbbqrv.supabase.co",
+  VITE_SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ4cWFsZmxienBqa3ZtdGJicXJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3ODQyNzgsImV4cCI6MjA5MzM2MDI3OH0.Itqr5hTJLCULhkQr_pc6qg0h0dTWkJbb2CRdChCN5h4",
+  VITE_API_URL: "https://quest-kcgz.onrender.com",
+  API_BASE: "https://quest-kcgz.onrender.com",
+  NEXT_PUBLIC_SUPABASE_URL: "https://vxqalflbzpjkvmtbbqrv.supabase.co",
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ4cWFsZmxienBqa3ZtdGJicXJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3ODQyNzgsImV4cCI6MjA5MzM2MDI3OH0.Itqr5hTJLCULhkQr_pc6qg0h0dTWkJbb2CRdChCN5h4"
+};
+
