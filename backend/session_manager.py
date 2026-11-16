@@ -314,16 +314,23 @@ class SessionManager:
             except Exception:
                 pass
 
-        # Ensure report / content is populated
-        if rec.get("report_content"):
-            rec["content"] = rec["report"] = rec["final_report"] = rec["report_content"]
-        elif rec.get("saved_report_path"):
+        # Ensure report / content is populated and stripped of raw metadata/debug appendices
+        raw_content = rec.get("report_content")
+        if not raw_content and rec.get("saved_report_path"):
             p = Path(rec["saved_report_path"])
             if p.is_file():
                 try:
-                    rec["content"] = rec["report"] = rec["final_report"] = rec["report_content"] = p.read_text(encoding="utf-8")
+                    raw_content = p.read_text(encoding="utf-8")
                 except Exception:
                     pass
+
+        if raw_content:
+            try:
+                from report_cleaner import clean_report_markdown
+                clean_content = clean_report_markdown(raw_content)
+            except Exception:
+                clean_content = raw_content
+            rec["content"] = rec["report"] = rec["final_report"] = rec["report_content"] = clean_content
 
         return rec
 

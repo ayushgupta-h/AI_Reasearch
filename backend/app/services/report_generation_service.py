@@ -134,10 +134,6 @@ class ReportGenerationService:
         # 1. Title
         sections.append(f"# {context.topic}\n")
 
-        # YAML frontmatter
-        frontmatter = self._frontmatter(context, citation_inventory)
-        sections.insert(1, frontmatter)
-
         # 2. Executive Summary
         sections.append(self._executive_summary(context, verification_map))
 

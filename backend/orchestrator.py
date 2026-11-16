@@ -58,6 +58,7 @@ from query_intake import QueryIntakeSystem, ResearchRequest
 from search_sources import SearchOrchestrator, SearchResult
 from citation_validator import CitationValidator
 from report_exporter import ReportExporter
+from report_cleaner import clean_report_markdown
 from knowledge_base import ResearchKnowledgeBase
 from app.checkpointing import PostgresCheckpointer
 from app.services.source_credibility import (
@@ -1013,6 +1014,7 @@ class MultiAgentOrchestrator:
                 "research": combined_research,
             })
 
+        drafted_report = clean_report_markdown(drafted_report)
         console.print(Panel("✅ Initial report draft completed", style="green"))
 
         return {
@@ -1277,6 +1279,7 @@ class MultiAgentOrchestrator:
             "research": evidence_context,
         })
 
+        refined_report = clean_report_markdown(refined_report)
         console.print(Panel(f"✅ Refinement Cycle {revision_idx} completed", style="green"))
 
         # Save revision history
@@ -1376,7 +1379,9 @@ class MultiAgentOrchestrator:
             f"---\n\n"
         )
 
-        full_document = frontmatter + final_report_with_citations
+        # Clean report content: strip any internal debug metadata/appendices
+        clean_final_report = clean_report_markdown(final_report)
+        full_document = frontmatter + clean_final_report
 
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(full_document)
@@ -1393,7 +1398,7 @@ class MultiAgentOrchestrator:
         base_path = out_dir / f"report_{timestamp}_{slug}"
         multi_exporter = ReportExporter()
         export_paths = multi_exporter.export_all(
-            markdown_text=full_document,
+            markdown_text=clean_final_report,
             base_path=base_path,
         )
         docx_path = export_paths.get("docx")
@@ -1432,9 +1437,11 @@ class MultiAgentOrchestrator:
         )
 
         return {
-            "final_report": full_document,
+            "final_report": clean_final_report,
             "saved_report_path": str(filepath.resolve()),
             "status": "completed",
+            "citations_verified": citations_verified,
+            "citations_total": citations_total,
             "logs": state.get("logs", []) + export_log,
         }
 

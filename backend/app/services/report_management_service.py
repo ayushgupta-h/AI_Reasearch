@@ -32,6 +32,7 @@ from app.schemas.report_management import (
     ReportExportRequest,
     ReportVersionCreateRequest,
 )
+from report_cleaner import clean_report_markdown
 from app.schemas.enums import (
     ReportFormat,
     ReportVerificationStatus,
@@ -101,8 +102,10 @@ class ReportManagementService:
             raise BadRequestError(
                 f"Report title must be between {_MIN_TITLE} and {_MAX_TITLE} characters."
             )
-        content = content_markdown or ""
+        content = clean_report_markdown(content_markdown or "")
         if not content.strip():
+            content = (content_markdown or "").strip()
+        if not content:
             raise BadRequestError("Cannot create an empty report.")
 
         report_id = uuid.uuid4().hex
@@ -228,8 +231,10 @@ class ReportManagementService:
     ) -> Dict[str, Any]:
         owner = self._require_owner(owner_id)
         report = self._require_report(report_id, owner)
-        content = payload.content_markdown
+        content = clean_report_markdown(payload.content_markdown)
         if not content.strip():
+            content = payload.content_markdown.strip()
+        if not content:
             raise BadRequestError("Cannot create an empty report version.")
 
         number = int(report["version"]) + 1
