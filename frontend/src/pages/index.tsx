@@ -505,12 +505,13 @@ export function findApprovalRequest(events: SSEMessage[]): { planId?: string; pl
  * SECTION 2 — UI PRIMITIVES
  * ============================================================ */
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline';
 const btnStyles: Record<ButtonVariant, string> = {
-  primary: 'bg-[#C5A36A] text-[#080806] font-semibold hover:bg-[#D6A65D] shadow-sm',
-  secondary: 'border border-[#453322] bg-[#14110D] hover:bg-[#1B1510] text-[#F4EBDD]',
-  ghost: 'hover:bg-[#1B1510] text-[#C0B19C]',
-  danger: 'bg-red-800 text-white hover:bg-red-700',
+  primary: 'btn-pioneer-primary',
+  secondary: 'btn-pioneer-secondary',
+  outline: 'border border-[#453322] bg-transparent hover:border-[#C5A36A] hover:bg-[#1B1510] text-[#F4EBDD] hover:shadow-[0_0_15px_rgba(197,163,106,0.2)] transition-all duration-300',
+  ghost: 'hover:bg-[#1B1510] text-[#C0B19C] hover:text-[#F4EBDD] transition-all duration-200',
+  danger: 'bg-red-800 text-white hover:bg-red-700 active:scale-[0.98] transition-all duration-200 shadow-sm',
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -519,7 +520,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ variant = 'secondary', loading, size = 'md', className, children, disabled, ...props }, ref) => (
     <button ref={ref} disabled={disabled || loading} {...props}
-      className={cn('inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors',
+      className={cn('inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all duration-300',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C5A36A]/60 disabled:cursor-not-allowed disabled:opacity-50',
         size === 'sm' ? 'px-3 py-1.5 text-[13px]' : 'px-4 py-2 text-sm',
         btnStyles[variant], className)}>
@@ -530,8 +531,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
 );
 Button.displayName = 'Button';
 
-const fieldCls = 'w-full rounded-lg border border-[#453322] bg-[#14110D] px-3.5 py-2.5 text-sm placeholder:text-[#817463] ' +
-  'text-[#F4EBDD] focus:outline-none focus:ring-2 focus:ring-[#C5A36A]/50 focus:border-[#C5A36A]';
+const fieldCls = 'w-full rounded-lg input-pioneer px-3.5 py-2.5 text-sm placeholder:text-[#817463] text-[#F4EBDD]';
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, ...props }, ref) => <input ref={ref} className={cn(fieldCls, className)} {...props} />);
@@ -596,8 +596,8 @@ export function Tabs({ tabs, active, onChange }: { tabs: { id: string; label: st
     <div role="tablist" className="flex gap-1 border-b border-[#302319]">
       {tabs.map((t) => (
         <button key={t.id} role="tab" aria-selected={active === t.id} onClick={() => onChange(t.id)}
-          className={cn('border-b-2 px-3.5 py-2 text-[13px] font-medium transition-colors',
-            active === t.id ? 'border-[#C5A36A] text-[#F3E9D7]' : 'border-transparent text-[#817463] hover:text-[#C0B19C]')}>
+          className={cn('relative border-b-2 px-3.5 py-2 text-[13px] font-medium transition-all duration-300',
+            active === t.id ? 'border-[#C5A36A] text-[#F3E9D7] shadow-[0_1px_8px_rgba(197,163,106,0.3)]' : 'border-transparent text-[#817463] hover:text-[#C0B19C]')}>
           {t.label}
         </button>
       ))}
@@ -616,13 +616,13 @@ export function Dialog({ open, onClose, title, children, footer }: {
   }, [open, onClose]);
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4 backdrop-blur-md transition-opacity duration-300"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div role="dialog" aria-modal="true" aria-label={title}
-        className="w-full max-w-md rounded-xl border border-[#453322] bg-[#10100E] p-5 shadow-2xl text-[#F4EBDD]">
+        className="w-full max-w-md pioneer-modal rounded-xl border border-[#453322] bg-[#10100E]/95 backdrop-blur-xl p-5 shadow-2xl text-[#F4EBDD] shadow-[0_16px_40px_rgba(0,0,0,0.7)]">
         <div className="mb-3 flex items-center justify-between border-b border-[#302319] pb-3">
           <h2 className="text-base font-serif font-semibold text-[#E9D6B6]">{title}</h2>
-          <button onClick={onClose} aria-label="Close" className="rounded p-1 text-[#817463] hover:text-[#F4EBDD]">
+          <button onClick={onClose} aria-label="Close" className="rounded p-1 text-[#817463] hover:text-[#F4EBDD] transition-colors duration-200">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -1067,6 +1067,7 @@ export function AppShell() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('rai-sidebar') === '1');
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
   useEffect(() => { localStorage.setItem('rai-sidebar', collapsed ? '1' : '0'); }, [collapsed]);
 
   const isVercelLocalhost = typeof window !== 'undefined' &&
@@ -1100,7 +1101,7 @@ export function AppShell() {
           <button onClick={() => setMobileOpen(true)} className="rounded p-2 text-[#C0B19C]"><Menu className="h-5 w-5" /></button>
           <span className="font-serif text-sm font-semibold tracking-wide text-[#E9D6B6]">Quest</span>
         </div>
-        <main className="min-h-0 flex-1 overflow-y-auto"><Outlet /></main>
+        <main className="min-h-0 flex-1 overflow-y-auto pioneer-enter" key={location.pathname}><Outlet /></main>
       </div>
     </div>
   );
@@ -1138,7 +1139,7 @@ function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onT
           <div className="grid h-7 w-7 shrink-0 place-items-center rounded bg-[#C5A36A] font-serif text-sm font-bold text-[#080806]">Q</div>
           {!collapsed && <span className="truncate font-serif text-[15px] font-semibold text-[#E9D6B6]">Quest</span>}
         </Link>
-        <button onClick={onToggle} aria-label="Toggle sidebar" className="ml-auto hidden rounded p-1.5 text-[#817463] hover:text-[#C5A36A] md:block">
+        <button onClick={onToggle} aria-label="Toggle sidebar" className="ml-auto hidden rounded p-1.5 text-[#817463] hover:text-[#C5A36A] md:block transition-colors duration-200">
           {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
         </button>
       </div>
@@ -1161,9 +1162,12 @@ function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onT
         <nav className="space-y-0.5" aria-label="Workspace">
           {NAV.map(({ to, label, icon: Icon }) => (
             <NavLink key={to} to={to} onClick={onNavigate} title={collapsed ? label : undefined}
-              className={({ isActive }) => cn('flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-[#C0B19C] hover:bg-[#1B1510] hover:text-[#F4EBDD]',
-                isActive && 'bg-[#302319] text-[#E9D6B6] font-medium', collapsed && 'justify-center px-0')}>
-              <Icon className="h-4 w-4 shrink-0 text-[#C5A36A]" />{!collapsed && label}
+              className={({ isActive }) => cn(
+                'nav-link-pioneer flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-[#C0B19C] hover:bg-[#1B1510] hover:text-[#F4EBDD]',
+                isActive && 'bg-[#302319]/80 border border-[#C5A36A]/30 text-[#E9D6B6] font-medium shadow-[0_0_12px_rgba(197,163,106,0.15)]',
+                collapsed && 'justify-center px-0'
+              )}>
+              <Icon className="h-4 w-4 shrink-0 text-[#C5A36A] transition-transform duration-300" />{!collapsed && label}
             </NavLink>
           ))}
         </nav>
@@ -1187,12 +1191,14 @@ function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed?: boolean; onT
                 {filtered.map((s) => (
                   <li key={s.id} className="group relative">
                     <button onClick={() => openSession(s.id)}
-                      className={cn('w-full truncate rounded px-2.5 py-1.5 text-left text-[12.5px] text-[#817463] hover:bg-[#1B1510] hover:text-[#F4EBDD]',
-                        activeId === s.id && 'bg-[#1B1510] text-[#E9D6B6] font-medium')}>
+                      className={cn(
+                        'w-full truncate rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-[#817463] hover:bg-[#1B1510] hover:text-[#F4EBDD] transition-all duration-200 hover:translate-x-1',
+                        activeId === s.id && 'bg-[#1B1510] border-l-2 border-[#C5A36A] text-[#E9D6B6] font-medium pl-3'
+                      )}>
                       {titleFromQuery(s.title || s.topic || s.query)}
                     </button>
                     <span className="absolute right-1 top-1 hidden items-center group-hover:flex">
-                      <button onClick={() => setDeleteId(s.id)} className="p-1 text-[#817463] hover:text-red-400"><Trash2 className="h-3 w-3" /></button>
+                      <button onClick={() => setDeleteId(s.id)} className="p-1 text-[#817463] hover:text-red-400 transition-colors"><Trash2 className="h-3 w-3" /></button>
                     </span>
                   </li>
                 ))}
@@ -1785,7 +1791,7 @@ export function HistoryPage() {
       ) : filtered.length === 0 ? (
         <EmptyState icon={<History className="h-6 w-6" />} title="No research sessions found" hint="Start an investigation from New Research or adjust your filters." />
       ) : (
-        <ul className="divide-y divide-[#302319] rounded-xl border border-[#453322] bg-[#10100E]">
+        <ul className="divide-y divide-[#302319] card-pioneer overflow-hidden shadow-xl">
           {filtered.map((s) => {
             const pName = s.project_id ? projectMap.get(s.project_id) : null;
             return (
@@ -2045,7 +2051,7 @@ export function ProjectsPage() {
             return (
               <div
                 key={pId}
-                className="group relative rounded-xl border border-[#453322] bg-[#10100E] p-5 shadow-lg transition-all hover:border-[#C5A36A]/50 flex flex-col justify-between"
+                className="group relative card-pioneer p-5 flex flex-col justify-between"
               >
                 <div>
                   <div className="flex justify-between items-start mb-2">
@@ -3167,7 +3173,7 @@ export function DocumentsPage() {
           hint="Upload PDFs, DOCX, or text files to ground multi-agent queries in your local literature."
         />
       ) : (
-        <div className="rounded-xl border border-[#453322] bg-[#10100E] overflow-hidden shadow-lg">
+        <div className="card-pioneer overflow-hidden shadow-xl">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-[#302319] bg-[#14110D] text-xs font-mono text-[#817463]">
               <tr>
@@ -3489,7 +3495,7 @@ export function KnowledgeBasePage() {
 
       {/* Real-time Overview Statistics Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <div className="rounded-xl border border-[#453322] bg-[#12100E] p-4 shadow-sm hover:border-[#C5A36A]/40 transition-colors">
+        <div className="card-pioneer p-4 shadow-md">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-[#A89885]">Indexed Documents</span>
             <FileText className="h-4 w-4 text-[#C5A36A]" />
@@ -3498,7 +3504,7 @@ export function KnowledgeBasePage() {
           <p className="text-[11px] text-[#786958] mt-0.5">PDF, DOCX, TXT literature</p>
         </div>
 
-        <div className="rounded-xl border border-[#453322] bg-[#12100E] p-4 shadow-sm hover:border-[#C5A36A]/40 transition-colors">
+        <div className="card-pioneer p-4 shadow-md">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-[#A89885]">Vectorized Chunks</span>
             <Files className="h-4 w-4 text-[#C5A36A]" />
@@ -3507,7 +3513,7 @@ export function KnowledgeBasePage() {
           <p className="text-[11px] text-[#786958] mt-0.5">ChromaDB encrypted blocks</p>
         </div>
 
-        <div className="rounded-xl border border-[#453322] bg-[#12100E] p-4 shadow-sm hover:border-[#C5A36A]/40 transition-colors">
+        <div className="card-pioneer p-4 shadow-md">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-[#A89885]">Research Memories</span>
             <Brain className="h-4 w-4 text-[#C5A36A]" />
@@ -3516,7 +3522,7 @@ export function KnowledgeBasePage() {
           <p className="text-[11px] text-[#786958] mt-0.5">Summaries, claims & evidence</p>
         </div>
 
-        <div className="rounded-xl border border-[#453322] bg-[#12100E] p-4 shadow-sm hover:border-[#C5A36A]/40 transition-colors">
+        <div className="card-pioneer p-4 shadow-md">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-[#A89885]">Contributing Sessions</span>
             <History className="h-4 w-4 text-[#C5A36A]" />
@@ -3670,7 +3676,7 @@ export function KnowledgeBasePage() {
             return (
               <div
                 key={recordId}
-                className="group rounded-xl border border-[#453322] bg-[#12100E] p-4 shadow-sm hover:border-[#C5A36A]/50 transition-all"
+                className="group card-pioneer p-4 shadow-md"
               >
                 {/* Header row */}
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
