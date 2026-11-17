@@ -1,7 +1,7 @@
 /**
  * Research AI Quest — Complete Application Suite (React + TypeScript)
  * Includes: Workspace, Report Editor, History, Projects, Documents,
- * Review Center, Knowledge Base, Contradictions, System Status, Auth, and Router.
+ * Knowledge Base, Contradictions, System Status, Auth, and Router.
  */
 
 import React, {
@@ -1055,7 +1055,6 @@ export function CompletionCard({ session, onOpenReport }: { session: ResearchSes
 const NAV = [
   { to: '/app/projects', label: 'Projects', icon: FolderKanban },
   { to: '/app/documents', label: 'Documents', icon: Files },
-  { to: '/app/review', label: 'Review Center', icon: ShieldCheck },
   { to: '/app/knowledge', label: 'Knowledge Base', icon: Brain },
   { to: '/app/contradictions', label: 'Contradictions', icon: GitCompare },
   { to: '/app/system', label: 'System Status', icon: Activity },
@@ -2550,172 +2549,7 @@ export function DocumentsPage() {
   );
 }
 
-/* ============================================================
- * SECTION 11 — REVIEW CENTER (FULL UI IMPLEMENTATION)
- * ============================================================ */
 
-export function ReviewCenterPage() {
-  const toast = useToast();
-  const qc = useQueryClient();
-  const navigate = useNavigate();
-  const [busyAction, setBusyAction] = useState<string | null>(null);
-
-  const { data: reviews = [], isLoading } = useQuery<any[]>({
-    queryKey: ['reviews'],
-    queryFn: async () => {
-      try {
-        const res = await api.get('/reviews/pending');
-        return asList<any>(res.data);
-      } catch (_) {
-        const fallback = await api.get(API.review.reviews).catch(() => ({ data: [] }));
-        return asList<any>(fallback.data);
-      }
-    },
-  });
-
-  const decidePlan = async (id: string, decision: 'approve' | 'reject' | 'modify') => {
-    setBusyAction(`plan-${id}-${decision}`);
-    try {
-      if (decision === 'approve') await api.post(API.review.approvePlan(id));
-      else if (decision === 'reject') await api.post(API.review.rejectPlan(id));
-      else await api.post(API.review.requestChanges(id), { notes: 'Analyst requested adjustments to research scope.' });
-      toast.push(`Research plan ${decision}d.`, 'success');
-      qc.invalidateQueries({ queryKey: ['reviews'] });
-    } catch (err) {
-      toast.push(apiError(err), 'error');
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const decideReport = async (id: string, decision: 'approved' | 'rejected') => {
-    setBusyAction(`report-${id}-${decision}`);
-    try {
-      await api.post(API.review.reportDecision(id), { decision });
-      toast.push(`Report ${decision}.`, 'success');
-      qc.invalidateQueries({ queryKey: ['reviews'] });
-    } catch (err) {
-      toast.push(apiError(err), 'error');
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  return (
-    <div className="mx-auto max-w-5xl px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Human-in-the-Loop Review Center</h1>
-          <p className="text-xs text-[#817463]">Inspect research plans, verify extracted claims, and approve final synthesis reports.</p>
-        </div>
-        <Badge className="border-[#C5A36A] text-[#E9D6B6]">
-          {reviews.length} Pending Review{reviews.length === 1 ? '' : 's'}
-        </Badge>
-      </div>
-
-      {isLoading ? (
-        <div className="space-y-3">{[0, 1].map((i) => <Skeleton key={i} className="h-28" />)}</div>
-      ) : reviews.length === 0 ? (
-        <div className="rounded-xl border border-[#453322] bg-[#10100E] p-10 text-center shadow-lg">
-          <ShieldCheck className="mx-auto h-12 w-12 text-[#C5A36A] mb-3" />
-          <h3 className="font-serif text-lg font-semibold text-[#F3E9D7]">All Review Queues Clear</h3>
-          <p className="text-sm text-[#817463] max-w-md mx-auto mt-2 leading-relaxed">
-            When research pipelines encounter confidence thresholds below safety requirements or human plan review is enabled, items pause execution and appear here for analyst authorization.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {reviews.map((r, i) => {
-            const isPlan = r.type === 'plan' || Boolean(r.plan_id);
-            const reviewId = r.id || r.plan_id || r.report_id || r.session_id || `rev-${i}`;
-            const targetSessionId = r.session_id || r.research_id;
-
-            return (
-              <div key={reviewId} className="rounded-xl border border-[#453322] bg-[#10100E] p-5 shadow-lg">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="rounded bg-[#C5A36A]/10 px-2 py-0.5 font-mono text-xs font-bold text-[#C5A36A] border border-[#C5A36A]/30 uppercase">
-                      {isPlan ? 'Plan Approval' : 'Report Decision'}
-                    </span>
-                    <h3 className="font-serif text-base font-semibold text-[#F4EBDD]">
-                      {r.title || r.query || 'Pending Research Item'}
-                    </h3>
-                  </div>
-                  {targetSessionId && (
-                    <button
-                      onClick={() => navigate(`/app/research/${targetSessionId}`)}
-                      className="inline-flex items-center gap-1 text-xs text-[#C5A36A] hover:underline"
-                    >
-                      Inspect Session <ArrowUpRight className="h-3 w-3" />
-                    </button>
-                  )}
-                </div>
-
-                <p className="text-xs text-[#C0B19C] mb-4 leading-relaxed">
-                  {r.objective || r.description || r.summary || (isPlan ? 'Initial research plan formulating strategy and web retrieval criteria.' : 'Draft synthesis report awaiting final reviewer sign-off.')}
-                </p>
-
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#302319] pt-3 text-xs">
-                  <span className="text-[#817463] font-mono">
-                    Created: {fmtDate(r.created_at)}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    {isPlan ? (
-                      <>
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          loading={busyAction === `plan-${reviewId}-approve`}
-                          onClick={() => decidePlan(reviewId, 'approve')}
-                        >
-                          <Check className="h-3.5 w-3.5" /> Approve Plan
-                        </Button>
-                        <Button
-                          size="sm"
-                          loading={busyAction === `plan-${reviewId}-modify`}
-                          onClick={() => decidePlan(reviewId, 'modify')}
-                        >
-                          Request Changes
-                        </Button>
-                        <Button
-                          variant="danger"
-                          size="sm"
-                          loading={busyAction === `plan-${reviewId}-reject`}
-                          onClick={() => decidePlan(reviewId, 'reject')}
-                        >
-                          Reject
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          loading={busyAction === `report-${reviewId}-approved`}
-                          onClick={() => decideReport(reviewId, 'approved')}
-                        >
-                          <Check className="h-3.5 w-3.5" /> Approve Report
-                        </Button>
-                        <Button
-                          variant="danger"
-                          size="sm"
-                          loading={busyAction === `report-${reviewId}-rejected`}
-                          onClick={() => decideReport(reviewId, 'rejected')}
-                        >
-                          Reject Report
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /* ============================================================
  * SECTION 12 — KNOWLEDGE BASE (FULL UI IMPLEMENTATION)
@@ -3586,7 +3420,7 @@ export function App() {
         <Route path="history" element={<HistoryPage />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="documents" element={<DocumentsPage />} />
-        <Route path="review" element={<ReviewCenterPage />} />
+        <Route path="review" element={<Navigate to="/app/new" replace />} />
         <Route path="knowledge" element={<KnowledgeBasePage />} />
         <Route path="contradictions" element={<ContradictionsPage />} />
         <Route path="system" element={<SystemStatusPage />} />
