@@ -56,7 +56,7 @@ __all__ = [
 ]
 
 APP_VERSION = "1.0.0"
-PROVIDER_ORDER: tuple[str, ...] = ("groq", "gemini", "mistral", "huggingface")
+PROVIDER_ORDER: tuple[str, ...] = ("gemini", "groq", "mistral", "huggingface")
 VALID_ENVIRONMENTS = ("development", "staging", "production", "test")
 
 # ── Path constants ───────────────────────────────────────────────────────────
@@ -166,7 +166,7 @@ class Settings:
     log_file: Optional[Path] = None
 
     # Pipeline defaults
-    default_provider: str = "groq"
+    default_provider: str = "gemini"
     max_revisions: int = 2
     approval_threshold: int = 8
 
@@ -259,16 +259,16 @@ class Settings:
             )
         )
 
-        raw_provider = _get(source, "LLM_PROVIDER", default="groq").lower()
+        raw_provider = _get(source, "LLM_PROVIDER", default="gemini").lower()
         # The gateway is a transport in front of the same vendors, so naming it
         # as the provider is shorthand for enabling it.
         gateway_enabled = _get_bool(
             source, "GATEWAY_ENABLED", default=raw_provider == "gateway"
         )
         if raw_provider == "gateway":
-            raw_provider = "groq"
+            raw_provider = "gemini"
         elif raw_provider not in PROVIDER_ORDER:
-            raw_provider = "groq"
+            raw_provider = "gemini"
 
         log_format = _get(source, "LOG_FORMAT", default="console").lower()
         if log_format not in {"console", "json"}:
@@ -460,7 +460,7 @@ class Settings:
         if self.gateway_model:
             return self.gateway_model
         vendor = (
-            self.default_provider if self.default_provider in PROVIDER_ORDER else "groq"
+            self.default_provider if self.default_provider in PROVIDER_ORDER else "gemini"
         )
         model = self.model_for(vendor)
         return f"{vendor}/{model}" if model else vendor

@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Provider Availability ───────────────────────────────────────────────────
 
-PROVIDER_ORDER = ["groq", "gemini", "mistral", "huggingface"]
+PROVIDER_ORDER = ["gemini", "groq", "mistral", "huggingface"]
 
 
 def _provider_has_key(provider: str) -> bool:
@@ -72,8 +72,8 @@ def _build_llm_for_provider(provider: str, temperature: float = 0):
             model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
             google_api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
             temperature=temperature,
-            max_retries=2,
-            timeout=30,
+            max_retries=3,
+            timeout=120,
             callbacks=cb,
         )
 
@@ -82,7 +82,7 @@ def _is_retryable(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(m in text for m in (
         "429", "rate limit", "rate_limit", "quota", "resource_exhausted",
-        "502", "503", "504", "overloaded", "temporarily unavailable",
+        "502", "503", "504", "deadline_exceeded", "deadline expired", "overloaded", "temporarily unavailable",
         "timeout", "timed out", "connection", "socket",
     ))
 
@@ -97,7 +97,7 @@ def get_llm(provider: Optional[str] = None, temperature: float = 0):
     Tries the requested provider first (with up to 2 retries for transient
     failures), then falls through other configured providers.
     """
-    requested = (provider or os.getenv("LLM_PROVIDER", "groq")).lower().strip()
+    requested = (provider or os.getenv("LLM_PROVIDER", "gemini")).lower().strip()
 
     chain = [requested] + [p for p in PROVIDER_ORDER if p != requested]
     chain = [p for p in chain if _provider_has_key(p)]

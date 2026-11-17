@@ -92,7 +92,7 @@ class TestPipelineExecution:
 
         events = run_pipeline(service)
 
-        assert calls == ["groq"]
+        assert calls == ["gemini"]
         complete = [payload for kind, payload in events if kind == "complete"]
         assert len(complete) == 1
         assert complete[0]["status"] == "completed"
@@ -100,7 +100,7 @@ class TestPipelineExecution:
         assert complete[0]["research_id"] == "run-test"
         assert len(sessions.saved) == 1
         assert sessions.saved[0]["user_id"] == "user-1"
-        assert sessions.saved[0]["notes"] == "provider=groq"
+        assert sessions.saved[0]["notes"] == "provider=gemini"
 
     def test_provider_chain_dedupes_and_honours_alias(self) -> None:
         service = ResearchService(make_settings(), FakeSessionService())  # type: ignore[arg-type]
@@ -113,7 +113,7 @@ class TestPipelineExecution:
 
         def fake_build(*, provider, **_kwargs):
             calls.append(provider)
-            if provider == "groq":
+            if provider == "gemini":
                 raise RuntimeError("429 quota exceeded for this project")
             return FakeOrchestrator(provider)
 
@@ -122,12 +122,12 @@ class TestPipelineExecution:
 
         events = run_pipeline(service)
 
-        assert calls[0] == "groq"
-        assert calls[1] == "gemini"
+        assert calls[0] == "gemini"
+        assert calls[1] == "groq"
         notifications = [message for kind, message in events if kind == "agent_start"]
-        assert any("retrying with 'gemini'" in message for message in notifications)
+        assert any("retrying with 'groq'" in message for message in notifications)
         complete = [payload for kind, payload in events if kind == "complete"][0]
-        assert complete["provider"] == "gemini"
+        assert complete["provider"] == "groq"
 
     def test_all_providers_failing_emits_safe_error(self, monkeypatch) -> None:
         secret = "sk-" + "a" * 24

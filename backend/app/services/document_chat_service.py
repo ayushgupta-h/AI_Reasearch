@@ -195,7 +195,7 @@ USER QUESTION:
 Provide a well-structured, grounded answer with bracketed citations [1], [2] referencing the source passages above:"""
 
         # 6. Execute completion via LLM fallback chain
-        answer, provider = self._execute_chat(DOCUMENT_CHAT_SYSTEM_PROMPT, user_prompt)
+        answer, provider = self._execute_chat(DOCUMENT_CHAT_SYSTEM_PROMPT, user_prompt, passages=passages)
 
         # 7. Identify active citations
         active_citations = []
@@ -337,7 +337,7 @@ USER QUESTION:
 
 Provide a comprehensive comparative analysis with clear markdown tables and bracketed citations [1], [2]:"""
 
-        answer, provider = self._execute_chat(MULTI_DOC_SYSTEM_PROMPT, user_prompt)
+        answer, provider = self._execute_chat(MULTI_DOC_SYSTEM_PROMPT, user_prompt, passages=passages)
 
         active_citations = [
             p for p in passages if f"[{p['index']}]" in answer or len(passages) <= len(document_ids)
@@ -404,26 +404,68 @@ Provide a comprehensive comparative analysis with clear markdown tables and brac
 
     # ── LLM Execution Helper ──────────────────────────────────────────────
 
-    def _execute_chat(self, system_prompt: str, user_prompt: str) -> Tuple[str, str]:
+    def _extractive_fallback(self, passages: List[Dict[str, Any]], user_prompt: str) -> Tuple[str, str]:
+        if not passages:
+            return (
+                "The system was unable to reach the AI models to generate a synthesis, and no document passages were found.",
+                "document-extractive",
+            )
+        lines = [
+            "### Document Passages Summary\n",
+            "*(Cloud AI model is temporarily unavailable; providing grounded analysis directly from extracted document passages)*\n",
+        ]
+        for p in passages[:4]:
+            fn = p.get("filename", "Document")
+            pg = p.get("page_number", 1)
+            idx = p.get("index", 1)
+            txt = p.get("text", "").strip()
+            snippet = txt[:450].strip()
+            if len(txt) > 450:
+                snippet += "..."
+            lines.append(f"**[{idx}] {fn} (Page {pg}):**\n> {snippet}\n")
+        lines.append("You can ask follow-up questions or re-try to get a full generative synthesis.")
+        return "\n".join(lines), "document-extractive"
+
+    def _execute_chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        passages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[str, str]:
         """Invoke LLM chain with custom system prompt and return (reply, provider)."""
         errors = []
         for provider in self._chat_service.provider_chain():
-            try:
-                llm = self._chat_service._build_llm(provider)
-                res = llm.invoke([("system", system_prompt), ("user", user_prompt)])
-                content = res.content
-                if isinstance(content, list):
-                    content = "\n".join(
-                        (b.get("text") if isinstance(b, dict) and b.get("text") else str(b))
-                        for b in content
+            for attempt in range(2):
+                try:
+                    llm = self._chat_service._build_llm(provider)
+                    res = llm.invoke([("system", system_prompt), ("user", user_prompt)])
+                    content = res.content
+                    if isinstance(content, list):
+                        content = "\n".join(
+                            (b.get("text") if isinstance(b, dict) and b.get("text") else str(b))
+                            for b in content
+                        )
+                    reply = str(content).strip()
+                    if reply:
+                        return reply, provider
+                except Exception as exc:
+                    err_msg = str(exc).lower()
+                    is_transient = any(
+                        m in err_msg
+                        for m in (
+                            "504", "503", "502", "429", "deadline", "timeout", "timed out", "temporarily unavailable"
+                        )
                     )
-                reply = str(content).strip()
-                if reply:
-                    return reply, provider
-            except Exception as exc:
-                logger.warning(f"document_chat.provider_failed: {provider} - {exc}")
-                errors.append(f"{provider}: {redact(exc)[:100]}")
-                continue
+                    if is_transient and attempt == 0:
+                        import time
+                        time.sleep(2.0)
+                        continue
+                    logger.warning(f"document_chat.provider_failed: {provider} - {exc}")
+                    errors.append(f"{provider}: {redact(exc)[:100]}")
+                    break
+
+        if passages:
+            return self._extractive_fallback(passages, user_prompt)
 
         raise LLMProviderError(
             "All model providers are temporarily unavailable for document analysis. "

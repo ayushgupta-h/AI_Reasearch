@@ -251,7 +251,7 @@ class LocalResearchExecutor:
                 "Persistent checkpointing is required to resume plan review."
             )
         orchestrator = build_orchestrator(
-            provider=provider or "groq",
+            provider=provider or "gemini",
             max_revisions=max_revisions,
             approval_threshold=approval_threshold,
             output_dir=output_dir,
