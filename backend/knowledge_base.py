@@ -74,10 +74,21 @@ def _get_embeddings():
     Return a LangChain-compatible embeddings object.
 
     Priority:
-      1. HuggingFaceEmbeddings (sentence-transformers, local, fast, 384-dim)
-      2. GoogleGenerativeAIEmbeddings (cloud API)
+      1. GoogleGenerativeAIEmbeddings (models/gemini-embedding-001, cloud API, 0MB RAM, fast)
+      2. HuggingFaceEmbeddings (sentence-transformers/all-MiniLM-L6-v2, local fallback)
       3. FakeEmbeddings (zero-dep fallback, random vectors — for CI / testing)
     """
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if gemini_key:
+        try:
+            from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
+            return GoogleGenerativeAIEmbeddings(
+                model="models/gemini-embedding-001",
+                google_api_key=gemini_key,
+            )
+        except Exception as e:
+            console.print(f"  [yellow]⚠ Gemini embeddings failed ({e}). Falling back to HuggingFace/Fake...[/yellow]")
+
     try:
         from langchain_huggingface import HuggingFaceEmbeddings  # type: ignore
         return HuggingFaceEmbeddings(
@@ -86,18 +97,7 @@ def _get_embeddings():
             encode_kwargs={"normalize_embeddings": True},
         )
     except Exception as e:
-        console.print(f"  [yellow]⚠ HuggingFace embeddings unavailable ({e}). Falling back to Gemini/Fake...[/yellow]")
-
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if gemini_key:
-        try:
-            from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
-            return GoogleGenerativeAIEmbeddings(
-                model="models/embedding-001",
-                google_api_key=gemini_key,
-            )
-        except Exception as e:
-            console.print(f"  [yellow]⚠ Gemini embeddings failed ({e}). Falling back to FakeEmbeddings...[/yellow]")
+        console.print(f"  [yellow]⚠ HuggingFace embeddings unavailable ({e}). Falling back to FakeEmbeddings...[/yellow]")
 
     from langchain_core.embeddings import FakeEmbeddings  # type: ignore
     return FakeEmbeddings(size=384)

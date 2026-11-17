@@ -60,7 +60,7 @@ async def run_research(
         service.stream(request, user_id),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
             "X-Accel-Buffering": "no",  # Disable Nginx buffering
             "Connection": "keep-alive",
         },

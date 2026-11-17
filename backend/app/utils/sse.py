@@ -20,15 +20,29 @@ RICH_TAG = re.compile(r"\[/?[a-zA-Z0-9 _#]*\]")
 # Agent name -> friendly label, matched against orchestrator log lines.
 AGENT_LABELS: tuple[tuple[str, str], ...] = (
     ("AGENT 1", "Strategist"),
+    ("STRATEGIST", "Strategist"),
+    ("INTAKE", "Strategist"),
     ("AGENT 2", "Search Engine"),
+    ("SEARCH ENGINE", "Search Engine"),
+    ("MULTI-SOURCE RETRIEVAL", "Search Engine"),
     ("AGENT 3", "Deep Reader"),
+    ("DEEP READER", "Deep Reader"),
+    ("READER AGENT", "Deep Reader"),
     ("AGENT 4", "Analyst"),
+    ("ANALYST", "Analyst"),
+    ("RAG KNOWLEDGE BASE", "Analyst"),
     ("AGENT 5", "Report Writer"),
+    ("REPORT WRITER", "Report Writer"),
+    ("WRITER", "Report Writer"),
     ("AGENT 6", "Critic"),
+    ("CRITIC", "Critic"),
     ("AGENT 7", "Refiner"),
+    ("REFINER", "Refiner"),
     ("AGENT 8", "Exporter"),
+    ("EXPORTER", "Exporter"),
     ("CITATION VALIDATOR", "Citation Validator"),
     ("MULTI-FORMAT EXPORT", "Multi-Format Export"),
+    ("MEMORY RETRIEVAL", "Strategist"),
 )
 
 

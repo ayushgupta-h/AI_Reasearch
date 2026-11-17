@@ -176,12 +176,12 @@ class ResearchService:
                     else:
                         event_queue.put((
                             "agent_start",
-                            f"Initialising Multi-Agent Orchestrator ({provider})...",
+                            f"Strategist: Initialising Multi-Agent Orchestrator ({provider})...",
                         ))
 
                     event_queue.put((
                         "agent_start",
-                        f"Launching research pipeline for: {request.topic}",
+                        f"Strategist: Launching research pipeline for: {request.topic}",
                     ))
                     candidate = dict(
                         self._executor.execute(
@@ -419,20 +419,34 @@ class ResearchService:
             # Inside the try so a disconnect before the first frame still
             # cancels the worker thread instead of leaving it running.
             yield build_event(
-                "progress",
+                "agent_start",
                 "Research pipeline initialising...",
-                data={"topic": request.topic, "research_id": research_id},
+                agent="Strategist",
+                data={
+                    "stage": "strategist",
+                    "agent": "Strategist",
+                    "status": "active",
+                    "topic": request.topic,
+                    "research_id": research_id,
+                    "detail": "Formulating research strategy & plan...",
+                },
             )
 
+            last_keepalive = time.monotonic()
             while True:
                 try:
                     item = await loop.run_in_executor(
-                        None, lambda: event_queue.get(timeout=0.05)
+                        None, lambda: event_queue.get(timeout=0.25)
                     )
                 except queue.Empty:
-                    # Keep proxies from dropping an idle connection.
-                    yield ": keepalive\n\n"
+                    now = time.monotonic()
+                    # Keep proxies from dropping an idle connection (emit every 15s)
+                    if now - last_keepalive >= 15.0:
+                        last_keepalive = now
+                        yield ": keepalive\n\n"
                     continue
+
+                last_keepalive = time.monotonic()
 
                 if item is None:
                     yield build_event("progress", "Pipeline execution complete.")
