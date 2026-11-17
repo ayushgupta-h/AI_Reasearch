@@ -38,6 +38,20 @@ def _owner(current_user: dict) -> str:
     return owner
 
 
+def _serialize_record(r: Any) -> dict:
+    if isinstance(r, dict):
+        d = dict(r)
+    elif hasattr(r, "__dict__"):
+        d = dict(r.__dict__)
+    else:
+        return {}
+    if "memory_id" not in d:
+        d["memory_id"] = d.get("id", "")
+    if "content" not in d or not d["content"]:
+        d["content"] = d.get("content_text", "")
+    return d
+
+
 @router.get(
     "/knowledge/stats",
     response_model=dict,
@@ -116,7 +130,7 @@ async def search_memory(
         return {
             "query": "",
             "user_id": user_id,
-            "results": [r.__dict__ for r in records],
+            "results": [_serialize_record(r) for r in records],
             "total": len(records),
         }
 
@@ -133,7 +147,7 @@ async def search_memory(
     return {
         "query": search_text,
         "user_id": user_id,
-        "results": [r.__dict__ for r in results],
+        "results": [_serialize_record(r) for r in results],
         "total": len(results),
     }
 
@@ -179,7 +193,7 @@ async def list_memory(
     )
     return {
         "user_id": user_id,
-        "results": [r.__dict__ for r in records],
+        "results": [_serialize_record(r) for r in records],
         "total": len(records),
         "limit": limit,
         "offset": offset,

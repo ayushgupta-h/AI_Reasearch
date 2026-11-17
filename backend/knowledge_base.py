@@ -74,36 +74,33 @@ def _get_embeddings():
     Return a LangChain-compatible embeddings object.
 
     Priority:
-      1. GoogleGenerativeAIEmbeddings (fast API call, no memory footprint on cloud containers)
-      2. HuggingFaceEmbeddings (sentence-transformers, local fallback)
+      1. HuggingFaceEmbeddings (sentence-transformers, local, fast, 384-dim)
+      2. GoogleGenerativeAIEmbeddings (cloud API)
       3. FakeEmbeddings (zero-dep fallback, random vectors — for CI / testing)
     """
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if gemini_key:
-        try:
-            from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
-            console.print("  [dim]🔢 Using Google Gemini Embeddings API (text-embedding-004)...[/dim]")
-            return GoogleGenerativeAIEmbeddings(
-                model="models/text-embedding-004",
-                google_api_key=gemini_key,
-            )
-        except Exception as e:
-            console.print(f"  [yellow]⚠ Gemini embeddings failed ({e}). Falling back to local embeddings...[/yellow]")
-
     try:
         from langchain_huggingface import HuggingFaceEmbeddings  # type: ignore
-        console.print(
-            "  [dim]🔢 Loading embedding model: all-MiniLM-L6-v2 (sentence-transformers)...[/dim]"
-        )
         return HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
             model_kwargs={"device": "cpu"},
             encode_kwargs={"normalize_embeddings": True},
         )
     except Exception as e:
-        console.print(f"  [yellow]⚠ HuggingFace embeddings unavailable ({e}). Using FakeEmbeddings.[/yellow]")
-        from langchain_core.embeddings import FakeEmbeddings  # type: ignore
-        return FakeEmbeddings(size=384)
+        console.print(f"  [yellow]⚠ HuggingFace embeddings unavailable ({e}). Falling back to Gemini/Fake...[/yellow]")
+
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if gemini_key:
+        try:
+            from langchain_google_genai import GoogleGenerativeAIEmbeddings  # type: ignore
+            return GoogleGenerativeAIEmbeddings(
+                model="models/embedding-001",
+                google_api_key=gemini_key,
+            )
+        except Exception as e:
+            console.print(f"  [yellow]⚠ Gemini embeddings failed ({e}). Falling back to FakeEmbeddings...[/yellow]")
+
+    from langchain_core.embeddings import FakeEmbeddings  # type: ignore
+    return FakeEmbeddings(size=384)
 
 
 # ─── Text Chunker ─────────────────────────────────────────────────────────────

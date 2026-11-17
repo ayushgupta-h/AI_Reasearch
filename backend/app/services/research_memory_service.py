@@ -50,6 +50,13 @@ class MemoryRecord:
     created_at: Optional[str]
     updated_at: Optional[str]
     deleted: bool
+    source_type: Optional[str] = None
+    filename: Optional[str] = None
+    document_id: Optional[str] = None
+    page_number: Optional[Any] = None
+    chunk_index: Optional[Any] = None
+    metadata: Optional[Dict[str, Any]] = None
+    content: Optional[str] = None
 
 
 class ResearchMemoryService:
@@ -85,42 +92,41 @@ class ResearchMemoryService:
         returns the existing record instead of creating a new one.
         """
         # Persist to PostgreSQL first (authoritative).
-        pg_record = self._repo.create_memory(
-            user_id=user_id,
-            content=content,
-            content_type=content_type,
-            verification_status=verification_status,
-            confidence=confidence,
-            project_id=project_id,
-            session_id=session_id,
-            source_id=source_id,
-            metadata_json=metadata_json,
-        )
+        pg_record = None
+        try:
+            pg_record = self._repo.create_memory(
+                user_id=user_id,
+                content=content,
+                content_type=content_type,
+                verification_status=verification_status,
+                confidence=confidence,
+                project_id=project_id,
+                session_id=session_id,
+                source_id=source_id,
+                metadata_json=metadata_json,
+            )
+        except Exception as repo_exc:
+            logger.warning(f"PostgreSQL create_memory deferred: {repo_exc}")
         if pg_record is None:
-            # Either duplicate (returned existing) or PostgreSQL not available.
-            if not self._repo.available:
-                import uuid
-                from datetime import datetime, timezone
-                mem_id = uuid.uuid4().hex
-                now = datetime.now(timezone.utc).isoformat()
-                pg_record = {
-                    "id": mem_id,
-                    "user_id": user_id,
-                    "project_id": project_id,
-                    "session_id": session_id,
-                    "source_id": source_id,
-                    "content_type": content_type,
-                    "content": content,
-                    "verification_status": verification_status,
-                    "confidence": confidence,
-                    "chroma_id": mem_id,
-                    "metadata_json": metadata_json,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            else:
-                existing = pg_record  # type: ignore[assignment]
-                return self._to_record(existing) if existing else None
+            import uuid
+            from datetime import datetime, timezone
+            mem_id = uuid.uuid4().hex
+            now = datetime.now(timezone.utc).isoformat()
+            pg_record = {
+                "id": mem_id,
+                "user_id": user_id,
+                "project_id": project_id,
+                "session_id": session_id,
+                "source_id": source_id,
+                "content_type": content_type,
+                "content": content,
+                "verification_status": verification_status,
+                "confidence": confidence,
+                "chroma_id": mem_id,
+                "metadata_json": metadata_json,
+                "created_at": now,
+                "updated_at": now,
+            }
 
         # Mirror into ChromaDB for semantic retrieval.
         chroma_id: Optional[str] = None
@@ -226,7 +232,41 @@ class ResearchMemoryService:
             settings=self._settings,
             user_id=user_id,
         )
-        return store.get_stats()
+        chroma_stats = store.get_stats()
+        repo_stats = (
+            self._repo.get_stats(user_id=user_id)
+            if hasattr(self._repo, "get_stats")
+            else {}
+        )
+
+        doc_stats: Dict[str, int] = {}
+        try:
+            from app.infrastructure.sqlite import SQLiteDatabase
+            from app.repositories.documents import DocumentRepository
+            db = SQLiteDatabase(self._settings.sessions_db_path)
+            doc_repo = DocumentRepository(db)
+            doc_stats = doc_repo.get_stats(user_id)
+        except Exception:
+            pass
+
+        return {
+            "total_documents": max(
+                chroma_stats.get("total_documents", 0),
+                doc_stats.get("total_documents", 0),
+            ),
+            "total_chunks": max(
+                chroma_stats.get("total_chunks", 0),
+                doc_stats.get("total_chunks", 0),
+            ),
+            "total_memories": max(
+                chroma_stats.get("total_memories", 0),
+                repo_stats.get("total_memories", 0),
+            ),
+            "contributing_sessions": max(
+                chroma_stats.get("contributing_sessions", 0),
+                repo_stats.get("contributing_sessions", 0),
+            ),
+        }
 
     def add_document_chunks(
         self,
@@ -277,20 +317,11 @@ class ResearchMemoryService:
         limit: int = 100,
         offset: int = 0,
     ) -> List[MemoryRecord]:
-        """List owned memories, newest first. Checks unified ChromaDB store when appropriate."""
-        if self._repo.available and not source_type:
-            records = self._repo.list_memories(
-                user_id=user_id,
-                project_id=project_id,
-                session_id=session_id,
-                verification_status=verification_status,
-                content_type=content_type,
-                limit=limit,
-                offset=offset,
-            )
-            return [self._to_record(r) for r in records]
+        """List owned memories, newest first. Checks unified ChromaDB store and PostgreSQL."""
+        out: List[MemoryRecord] = []
+        seen_ids = set()
 
-        # ChromaDB vector store for unified knowledge (documents + research)
+        # 1. Fetch from ChromaDB (contains document chunks and mirrored research memories)
         try:
             store = ResearchMemoryStore(
                 settings=self._settings,
@@ -306,30 +337,54 @@ class ResearchMemoryService:
                 content_type=content_type,
                 limit=limit,
             )
-            out: List[MemoryRecord] = []
             for item in chroma_records:
                 meta = item.get("metadata", {})
-                out.append(
-                    MemoryRecord(
-                        id=item.get("id", ""),
-                        user_id=meta.get("user_id", user_id),
-                        project_id=meta.get("project_id"),
-                        session_id=meta.get("session_id"),
-                        source_id=meta.get("source_id") or meta.get("document_id") or meta.get("filename"),
-                        content_type=meta.get("content_type", "finding"),
-                        content_text=item.get("content", ""),
-                        verification_status=meta.get("verification_status", "unverified"),
-                        confidence=float(meta["confidence"]) if meta.get("confidence") else None,
-                        chroma_id=item.get("id"),
-                        metadata_json=meta.get("metadata_json"),
-                        created_at=meta.get("created_at"),
-                        updated_at=meta.get("updated_at"),
-                        deleted=False,
-                    )
+                rec = self._to_record({
+                    "id": item.get("id", ""),
+                    "user_id": meta.get("user_id", user_id),
+                    "project_id": meta.get("project_id"),
+                    "session_id": meta.get("session_id"),
+                    "source_id": meta.get("source_id") or meta.get("document_id") or meta.get("filename"),
+                    "content_type": meta.get("content_type", "finding"),
+                    "content_text": item.get("content", ""),
+                    "verification_status": meta.get("verification_status", "unverified"),
+                    "confidence": float(meta["confidence"]) if meta.get("confidence") else None,
+                    "chroma_id": item.get("id"),
+                    "metadata": meta,
+                    "created_at": meta.get("created_at"),
+                    "updated_at": meta.get("updated_at"),
+                })
+                out.append(rec)
+                seen_ids.add(rec.id)
+                if rec.chroma_id:
+                    seen_ids.add(rec.chroma_id)
+        except Exception as exc:
+            logger.warning(f"ChromaDB list_memories warning: {exc}")
+
+        # 2. If research memories requested or all, also pull from PostgreSQL repo
+        if self._repo.available and (source_type in {"research", "all", None} or not source_type):
+            try:
+                pg_records = self._repo.list_memories(
+                    user_id=user_id,
+                    project_id=project_id,
+                    session_id=session_id,
+                    verification_status=verification_status,
+                    content_type=content_type,
+                    limit=limit,
+                    offset=offset,
                 )
-            return out
-        except Exception:
-            return []
+                for r in pg_records:
+                    rec_id = str(r.get("id", ""))
+                    chroma_id = r.get("chroma_id")
+                    if rec_id not in seen_ids and (not chroma_id or chroma_id not in seen_ids):
+                        rec = self._to_record(r)
+                        out.append(rec)
+                        seen_ids.add(rec_id)
+            except Exception as exc:
+                logger.warning(f"PostgreSQL list_memories warning: {exc}")
+
+        out.sort(key=lambda r: str(r.created_at or ""), reverse=True)
+        return out[:limit]
 
     # ── Semantic retrieval ─────────────────────────────────────────────
 
@@ -372,51 +427,96 @@ class ResearchMemoryService:
         records: List[MemoryRecord] = []
         for item in results:
             meta = item.get("metadata", {})
-            records.append(
-                MemoryRecord(
-                    id=meta.get("chroma_id", item.get("id", "")),
-                    user_id=meta.get("user_id", user_id),
-                    project_id=meta.get("project_id"),
-                    session_id=meta.get("session_id"),
-                    source_id=meta.get("source_id"),
-                    content_type=meta.get("content_type", "finding"),
-                    content_text=item.get("content", ""),
-                    verification_status=meta.get(
-                        "verification_status", "unverified"
-                    ),
-                    confidence=(
-                        float(meta["confidence"])
-                        if meta.get("confidence")
-                        else None
-                    ),
-                    chroma_id=item.get("id"),
-                    metadata_json=meta.get("metadata_json"),
-                    created_at=meta.get("created_at"),
-                    updated_at=meta.get("updated_at"),
-                    deleted=False,
-                )
-            )
+            raw_rec = {
+                "id": meta.get("chroma_id", item.get("id", "")),
+                "user_id": meta.get("user_id", user_id),
+                "project_id": meta.get("project_id", project_id),
+                "session_id": meta.get("session_id", session_id),
+                "source_id": meta.get("source_id"),
+                "content_type": meta.get("content_type", "finding"),
+                "content_text": item.get("content", ""),
+                "verification_status": meta.get("verification_status", "unverified"),
+                "confidence": (
+                    float(meta["confidence"])
+                    if meta.get("confidence")
+                    else None
+                ),
+                "chroma_id": item.get("id"),
+                "metadata_json": meta.get("metadata_json"),
+                "created_at": meta.get("created_at"),
+                "updated_at": meta.get("updated_at"),
+                "deleted": False,
+                "metadata": meta,
+                "filename": meta.get("filename") or meta.get("title"),
+                "document_id": meta.get("document_id"),
+                "page_number": meta.get("page_number"),
+                "chunk_index": meta.get("chunk_index"),
+                "source_type": meta.get("source_type", "document" if meta.get("content_type") == "document_chunk" else "research"),
+            }
+            records.append(self._to_record(raw_rec))
         return records
 
     # ── Internal ──────────────────────────────────────────────────────
 
     @staticmethod
     def _to_record(record: Mapping[str, Any]) -> MemoryRecord:
+        meta = {}
+        raw_meta = record.get("metadata")
+        if isinstance(raw_meta, dict):
+            meta = dict(raw_meta)
+        elif record.get("metadata_json"):
+            try:
+                import json
+                meta = json.loads(str(record["metadata_json"]))
+            except Exception:
+                meta = {}
+
+        c_text = str(record.get("content_text") or record.get("content") or "")
+        c_type = str(record.get("content_type") or meta.get("content_type", "finding"))
+        doc_id = record.get("document_id") or meta.get("document_id")
+        is_doc = (
+            record.get("source_type") == "document"
+            or meta.get("source_type") == "document"
+            or c_type == "document_chunk"
+            or bool(doc_id)
+        )
+        src_type = "document" if is_doc else "research"
+        fname = record.get("filename") or meta.get("filename") or meta.get("title")
+        p_num = record.get("page_number") or meta.get("page_number")
+        chk_idx = record.get("chunk_index") or meta.get("chunk_index")
+        v_status = str(record.get("verification_status") or meta.get("verification_status", "verified" if is_doc else "unverified"))
+
         return MemoryRecord(
-            id=str(record["id"]),
-            user_id=str(record["user_id"]),
-            project_id=record.get("project_id"),
-            session_id=record.get("session_id"),
-            source_id=record.get("source_id"),
-            content_type=record.get("content_type", "finding"),
-            content_text=record.get("content_text", ""),
-            verification_status=record.get("verification_status", "unverified"),
-            confidence=record.get("confidence"),
+            id=str(record.get("id") or record.get("memory_id") or ""),
+            user_id=str(record.get("user_id") or meta.get("user_id", "")),
+            project_id=record.get("project_id") or meta.get("project_id"),
+            session_id=record.get("session_id") or meta.get("session_id"),
+            source_id=record.get("source_id") or meta.get("source_id"),
+            content_type=c_type,
+            content_text=c_text,
+            verification_status=v_status,
+            confidence=float(record["confidence"]) if record.get("confidence") is not None else None,
             chroma_id=record.get("chroma_id"),
             metadata_json=record.get("metadata_json"),
-            created_at=record.get("created_at"),
-            updated_at=record.get("updated_at"),
+            created_at=record.get("created_at") or meta.get("created_at"),
+            updated_at=record.get("updated_at") or meta.get("updated_at"),
             deleted=bool(record.get("deleted", False)),
+            source_type=src_type,
+            filename=fname,
+            document_id=doc_id,
+            page_number=p_num,
+            chunk_index=chk_idx,
+            metadata={
+                **meta,
+                "source_type": src_type,
+                "content_type": c_type,
+                "filename": fname,
+                "document_id": doc_id,
+                "page_number": p_num,
+                "chunk_index": chk_idx,
+                "verification_status": v_status,
+            },
+            content=c_text,
         )
 
 

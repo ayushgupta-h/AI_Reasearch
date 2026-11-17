@@ -267,6 +267,19 @@ class DocumentRepository:
         )
         return affected > 0
 
+    def get_stats(self, owner_id: str) -> Dict[str, int]:
+        self.ensure_schema()
+        row = self._db.fetch_one(
+            "SELECT COUNT(document_id) as total_docs, SUM(COALESCE(chunk_count, 0)) as total_chunks "
+            "FROM documents WHERE owner_id = ? AND processing_status != 'failed'",
+            (owner_id,),
+        )
+        if not row:
+            return {"total_documents": 0, "total_chunks": 0}
+        total_docs = row.get("total_docs") or 0
+        total_chunks = row.get("total_chunks") or 0
+        return {"total_documents": int(total_docs), "total_chunks": int(total_chunks)}
+
     # ── Conversational Document Chat ───────────────────────────────────────
 
     def create_conversation(

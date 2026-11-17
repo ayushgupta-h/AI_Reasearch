@@ -50,7 +50,6 @@ class ResearchMemory(Base, TimestampMixin, SoftDeleteMixin):
         Index("ix_research_memory_project", "project_id"),
         Index("ix_research_memory_session", "session_id"),
         Index("ix_research_memory_verification", "verification_status"),
-        Index("ix_research_memory_content_type", "content_type"),
         UniqueConstraint(
             "user_id",
             "project_id",

@@ -57,6 +57,22 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _build_chroma_where(conditions: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Build a compliant ChromaDB where clause using $and when multiple conditions exist."""
+    conds = []
+    for k, v in conditions.items():
+        if v is not None and v != "":
+            if isinstance(v, dict):
+                conds.append({k: v})
+            else:
+                conds.append({k: {"$eq": str(v)}})
+    if not conds:
+        return None
+    if len(conds) == 1:
+        return conds[0]
+    return {"$and": conds}
+
+
 class ResearchMemoryStore:
     """
     ChromaDB vector store for research memory with ownership isolation.
@@ -297,24 +313,51 @@ class ResearchMemoryStore:
         if not texts_to_embed:
             return 0
 
-        embeddings = self._embeddings.embed_documents(texts_to_embed)
-
         vs = self._get_vectorstore()
-        vs._collection.upsert(
-            ids=ids,
-            documents=encrypted_docs,
-            embeddings=embeddings,
-            metadatas=metadatas,
-        )
-        if self._collection_name != self._user_collection_name:
-            user_vs = self._get_user_vectorstore()
-            user_vs._collection.upsert(
-                ids=ids,
-                documents=encrypted_docs,
-                embeddings=embeddings,
-                metadatas=metadatas,
-            )
-        return len(texts_to_embed)
+        user_vs = self._get_user_vectorstore() if self._collection_name != self._user_collection_name else None
+
+        batch_size = 32
+        total_indexed = 0
+
+        for b_start in range(0, len(texts_to_embed), batch_size):
+            b_end = min(b_start + batch_size, len(texts_to_embed))
+            b_texts = texts_to_embed[b_start:b_end]
+            b_ids = ids[b_start:b_end]
+            b_docs = encrypted_docs[b_start:b_end]
+            b_metas = metadatas[b_start:b_end]
+
+            try:
+                b_embeddings = self._embeddings.embed_documents(b_texts)
+            except Exception as emb_exc:
+                logger.warning(
+                    f"Embedding batch {b_start}-{b_end} failed: {emb_exc}. Retrying individually..."
+                )
+                b_embeddings = []
+                for single_t in b_texts:
+                    try:
+                        b_embeddings.append(self._embeddings.embed_documents([single_t])[0])
+                    except Exception:
+                        b_embeddings.append([0.0] * 384)
+
+            try:
+                vs._collection.upsert(
+                    ids=b_ids,
+                    documents=b_docs,
+                    embeddings=b_embeddings,
+                    metadatas=b_metas,
+                )
+                if user_vs is not None:
+                    user_vs._collection.upsert(
+                        ids=b_ids,
+                        documents=b_docs,
+                        embeddings=b_embeddings,
+                        metadatas=b_metas,
+                    )
+                total_indexed += len(b_texts)
+            except Exception as upsert_exc:
+                logger.warning(f"Upserting chunk batch {b_start}-{b_end} failed: {upsert_exc}")
+
+        return total_indexed
 
     def delete_document_chunks(self, *, document_id: str) -> int:
         """Purge all chunks associated with a deleted document."""
@@ -392,7 +435,12 @@ class ResearchMemoryStore:
 
     def delete_memory(self, *, memory_id: str) -> bool:
         """Delete a memory record by ID. Returns ``True`` if deleted."""
-        doc_id = f"mem-{memory_id}"
+        candidate_ids = [memory_id]
+        if not memory_id.startswith("mem-"):
+            candidate_ids.append(f"mem-{memory_id}")
+        else:
+            candidate_ids.append(memory_id.replace("mem-", "", 1))
+
         deleted = False
         target_stores = [self._get_vectorstore()]
         if self._collection_name != self._user_collection_name:
@@ -400,9 +448,9 @@ class ResearchMemoryStore:
 
         for vs in target_stores:
             try:
-                existing = vs._collection.get(ids=[doc_id])
+                existing = vs._collection.get(ids=candidate_ids)
                 if existing and existing.get("ids"):
-                    vs._collection.delete(ids=[doc_id])
+                    vs._collection.delete(ids=existing["ids"])
                     deleted = True
             except Exception:
                 pass
@@ -455,24 +503,33 @@ class ResearchMemoryStore:
             else self._get_vectorstore()
         )
 
-        filter_meta: Dict[str, Any] = {"user_id": {"$eq": self._user_id}}
+        where_dict: Dict[str, Any] = {"user_id": self._user_id}
         active_proj = project_id or self._project_id
         active_sess = session_id or self._session_id
 
         if active_proj:
-            filter_meta["project_id"] = {"$eq": active_proj}
+            where_dict["project_id"] = active_proj
         if active_sess:
-            filter_meta["session_id"] = {"$eq": active_sess}
+            where_dict["session_id"] = active_sess
         if content_type:
-            filter_meta["content_type"] = {"$eq": content_type}
+            where_dict["content_type"] = content_type
         if document_id:
-            filter_meta["document_id"] = {"$eq": document_id}
+            where_dict["document_id"] = document_id
+
+        filter_meta = _build_chroma_where(where_dict)
 
         try:
             docs = target_vs.similarity_search(query, k=max(k * 2, 10), filter=filter_meta)
         except Exception as exc:
             logger.warning("memory.search_filter_failed", extra={"error": str(exc)})
-            docs = target_vs.similarity_search(query, k=max(k * 2, 10))
+            try:
+                docs = target_vs.similarity_search(
+                    query,
+                    k=max(k * 2, 10),
+                    filter={"user_id": {"$eq": self._user_id}},
+                )
+            except Exception:
+                docs = []
 
         allowed_doc_ids = set(document_ids) if document_ids else None
         results: List[Dict[str, Any]] = []
@@ -541,15 +598,17 @@ class ResearchMemoryStore:
             if (not self._project_id and not self._session_id)
             else self._get_vectorstore()
         )
-        where: Dict[str, Any] = {"user_id": {"$eq": self._user_id}}
+        where_dict: Dict[str, Any] = {"user_id": self._user_id}
         active_proj = project_id or self._project_id
         active_sess = session_id or self._session_id
         if active_proj:
-            where["project_id"] = {"$eq": active_proj}
+            where_dict["project_id"] = active_proj
         if active_sess:
-            where["session_id"] = {"$eq": active_sess}
+            where_dict["session_id"] = active_sess
         if content_type:
-            where["content_type"] = {"$eq": content_type}
+            where_dict["content_type"] = content_type
+
+        where = _build_chroma_where(where_dict)
 
         try:
             result = target_vs._collection.get(

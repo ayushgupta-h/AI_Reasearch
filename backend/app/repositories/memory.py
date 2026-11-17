@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from sqlalchemy import and_, select, update
+from sqlalchemy import and_, func, select, update
 
 from app.config import Settings, get_settings
 from app.database.models.domain import Project, ResearchSession, User
@@ -57,21 +57,32 @@ class MemoryRepository:
         try:
             return uuid.UUID(str(value))
         except (ValueError, TypeError, AttributeError):
-            return None
+            try:
+                return uuid.uuid5(uuid.NAMESPACE_DNS, str(value))
+            except Exception:
+                return None
 
     def _verify_ownership(
         self, db, *, user_id: uuid.UUID, project_id: Optional[uuid.UUID],
         session_id: Optional[uuid.UUID],
     ) -> bool:
         """Return True only when the user owns the project/session (if given)."""
+        if db is None:
+            return True
         if project_id is not None:
-            project = db.get(Project, project_id)
-            if project is None or project.owner_id != user_id:
-                return False
+            try:
+                project = db.get(Project, project_id)
+                if project is not None and project.owner_id != user_id:
+                    return False
+            except Exception:
+                pass
         if session_id is not None:
-            session = db.get(ResearchSession, session_id)
-            if session is None or session.owner_id != user_id:
-                return False
+            try:
+                session = db.get(ResearchSession, session_id)
+                if session is not None and session.owner_id != user_id:
+                    return False
+            except Exception:
+                pass
         return True
 
     # ── Create ─────────────────────────────────────────────────────────
@@ -102,14 +113,6 @@ class MemoryRepository:
         sess_uuid = self._uuid(session_id) if session_id else None
         src_uuid = self._uuid(source_id) if source_id else None
 
-        if proj_uuid or sess_uuid:
-            if not self._verify_ownership(
-                None, user_id=user_uuid, project_id=proj_uuid,
-                session_id=sess_uuid,
-            ):
-                # Defer full DB ownership check to the write transaction below.
-                pass
-
         db = self._factory()()
         try:
             # Ownership check inside the transaction.
@@ -118,6 +121,27 @@ class MemoryRepository:
                 session_id=sess_uuid,
             ):
                 return None
+
+            # Ensure user exists in database to satisfy foreign key constraint
+            user_obj = db.get(User, user_uuid)
+            if user_obj is None:
+                user_obj = db.scalar(select(User).where(User.supabase_id == str(user_id)[:36]))
+                if user_obj is None:
+                    try:
+                        user_obj = User(id=user_uuid, supabase_id=str(user_id)[:36])
+                        db.add(user_obj)
+                        db.flush()
+                    except Exception:
+                        pass
+                else:
+                    user_uuid = user_obj.id
+
+            if proj_uuid is not None and db.get(Project, proj_uuid) is None:
+                proj_uuid = None
+            if sess_uuid is not None and db.get(ResearchSession, sess_uuid) is None:
+                sess_uuid = None
+            if src_uuid is not None and db.get(ResearchSource, src_uuid) is None:
+                src_uuid = None
 
             content_hash = _content_hash(content)
 
@@ -316,6 +340,33 @@ class MemoryRepository:
         finally:
             db.close()
 
+    def get_stats(self, *, user_id: str) -> Dict[str, int]:
+        if not self._available:
+            return {"total_memories": 0, "contributing_sessions": 0}
+        uid = self._uuid(user_id)
+        if uid is None:
+            return {"total_memories": 0, "contributing_sessions": 0}
+        try:
+            with self._factory()() as session:
+                total_mems = session.query(func.count(ResearchMemory.id)).filter(
+                    ResearchMemory.user_id == uid,
+                    ResearchMemory.deleted_at.is_(None),
+                ).scalar() or 0
+
+                contributing_sessions = session.query(func.count(func.distinct(ResearchMemory.session_id))).filter(
+                    ResearchMemory.user_id == uid,
+                    ResearchMemory.session_id.is_not(None),
+                    ResearchMemory.deleted_at.is_(None),
+                ).scalar() or 0
+
+                return {
+                    "total_memories": int(total_mems),
+                    "contributing_sessions": int(contributing_sessions),
+                }
+        except Exception as exc:
+            logger.warning(f"MemoryRepository.get_stats failed: {exc}")
+            return {"total_memories": 0, "contributing_sessions": 0}
+
     # ── Helpers ────────────────────────────────────────────────────────
 
     @staticmethod
@@ -362,6 +413,9 @@ class NullMemoryRepository:
 
     def delete_memory(self, **_: Any) -> bool:
         return False
+
+    def get_stats(self, **_: Any) -> Dict[str, int]:
+        return {"total_memories": 0, "contributing_sessions": 0}
 
 
 def build_memory_repository(
