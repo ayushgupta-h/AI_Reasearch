@@ -102,16 +102,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         allow_credentials=(
             settings.cors_allow_credentials and "*" not in settings.allowed_origins
         ),
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
         allow_headers=[
-            "Authorization",
-            "Content-Type",
-            "Accept",
-            "Last-Event-ID",
-            "Cache-Control",
-            "X-Request-ID",
-            "traceparent",
-            "tracestate",
+            "*",
         ],
         expose_headers=[
             "X-Request-ID",

@@ -226,43 +226,60 @@ class ResearchMemoryService:
                 logger.warning("memory.chroma_delete_failed", extra={"error": str(exc)})
         return True
 
-    def get_stats(self, *, user_id: str) -> Dict[str, int]:
+    def get_stats(self, user_id: Optional[str] = None, *, user_id_kw: Optional[str] = None, **kwargs) -> Dict[str, int]:
         """Aggregate persistent knowledge metrics across documents and research sessions."""
-        store = ResearchMemoryStore(
-            settings=self._settings,
-            user_id=user_id,
-        )
-        chroma_stats = store.get_stats()
+        uid = str(user_id or user_id_kw or kwargs.get("user_id") or "")
+        pg_stats: Dict[str, int] = {}
+        try:
+            from app.infrastructure.postgres_bridge import get_knowledge_stats
+            pg_stats = get_knowledge_stats(uid)
+        except Exception as exc:
+            logger.warning(f"PostgreSQL get_knowledge_stats warning: {exc}")
+
+        chroma_stats: Dict[str, int] = {}
+        try:
+            store = ResearchMemoryStore(
+                settings=self._settings,
+                user_id=uid,
+            )
+            chroma_stats = store.get_stats()
+        except Exception as exc:
+            logger.warning(f"ChromaDB get_stats warning: {exc}")
+
         repo_stats = (
-            self._repo.get_stats(user_id=user_id)
+            self._repo.get_stats(user_id=uid)
             if hasattr(self._repo, "get_stats")
             else {}
         )
 
         doc_stats: Dict[str, int] = {}
         try:
-            from app.infrastructure.sqlite import SQLiteDatabase
+            from app.infrastructure.sqlite_database import SQLiteDatabase
             from app.repositories.documents import DocumentRepository
             db = SQLiteDatabase(self._settings.sessions_db_path)
             doc_repo = DocumentRepository(db)
-            doc_stats = doc_repo.get_stats(user_id)
+            doc_stats = doc_repo.get_stats(uid)
         except Exception:
             pass
 
         return {
             "total_documents": max(
+                pg_stats.get("total_documents", 0),
                 chroma_stats.get("total_documents", 0),
                 doc_stats.get("total_documents", 0),
             ),
             "total_chunks": max(
+                pg_stats.get("total_chunks", 0),
                 chroma_stats.get("total_chunks", 0),
                 doc_stats.get("total_chunks", 0),
             ),
             "total_memories": max(
+                pg_stats.get("total_memories", 0),
                 chroma_stats.get("total_memories", 0),
                 repo_stats.get("total_memories", 0),
             ),
             "contributing_sessions": max(
+                pg_stats.get("contributing_sessions", 0),
                 chroma_stats.get("contributing_sessions", 0),
                 repo_stats.get("contributing_sessions", 0),
             ),
@@ -383,6 +400,49 @@ class ResearchMemoryService:
             except Exception as exc:
                 logger.warning(f"PostgreSQL list_memories warning: {exc}")
 
+        # 3. Pull uploaded documents so they always display in the Knowledge Base
+        if source_type in {"document", "all", None} or not source_type:
+            try:
+                from app.infrastructure.postgres_bridge import list_knowledge_documents
+                doc_list = list_knowledge_documents(user_id, limit=limit)
+                if not doc_list:
+                    from app.infrastructure.sqlite_database import SQLiteDatabase
+                    from app.repositories.documents import DocumentRepository
+                    db = SQLiteDatabase(self._settings.sessions_db_path)
+                    doc_repo = DocumentRepository(db)
+                    doc_list, _ = doc_repo.list_documents(owner_id=user_id, limit=limit)
+
+                for doc in doc_list:
+                    did = doc.get("document_id") or doc.get("id")
+                    if did and did not in seen_ids:
+                        seen_ids.add(did)
+                        c_count = doc.get("chunk_count") or 0
+                        fname = doc.get("original_filename") or "Document"
+                        rec = self._to_record({
+                            "id": did,
+                            "user_id": user_id,
+                            "project_id": doc.get("project_id"),
+                            "content_type": "document",
+                            "content_text": f"Document: {fname} ({doc.get('size_bytes', 0)} bytes, {c_count} vectorized chunks).",
+                            "verification_status": "verified",
+                            "created_at": doc.get("created_at"),
+                            "updated_at": doc.get("updated_at"),
+                            "source_type": "document",
+                            "filename": fname,
+                            "document_id": did,
+                            "chunk_count": c_count,
+                            "metadata": {
+                                "document_id": did,
+                                "filename": fname,
+                                "chunk_count": c_count,
+                                "size_bytes": doc.get("size_bytes", 0),
+                                "source_type": "document",
+                            },
+                        })
+                        out.append(rec)
+            except Exception as exc:
+                logger.warning(f"Document list_memories warning: {exc}")
+
         out.sort(key=lambda r: str(r.created_at or ""), reverse=True)
         return out[:limit]
 
@@ -454,6 +514,40 @@ class ResearchMemoryService:
                 "source_type": meta.get("source_type", "document" if meta.get("content_type") == "document_chunk" else "research"),
             }
             records.append(self._to_record(raw_rec))
+
+        # Fallback keyword ranking across documents and chunks if semantic search returned 0 items
+        if not records and query:
+            try:
+                from app.infrastructure.postgres_bridge import list_knowledge_documents, get_document_chunks
+                docs = list_knowledge_documents(user_id, limit=20)
+                q_terms = [t.lower() for t in query.split() if len(t) > 2]
+                for d in docs:
+                    did = d["document_id"]
+                    chunks = get_document_chunks(did, user_id)
+                    for c in chunks:
+                        txt = c.get("content", "")
+                        if any(term in txt.lower() for term in q_terms):
+                            records.append(self._to_record({
+                                "id": c.get("chunk_id", ""),
+                                "user_id": user_id,
+                                "project_id": d.get("project_id"),
+                                "content_type": "document_chunk",
+                                "content_text": txt,
+                                "verification_status": "verified",
+                                "created_at": c.get("created_at"),
+                                "source_type": "document",
+                                "filename": d.get("original_filename"),
+                                "document_id": did,
+                                "page_number": c.get("page_number", 1),
+                                "chunk_index": c.get("chunk_index", 0),
+                            }))
+                            if len(records) >= k:
+                                break
+                    if len(records) >= k:
+                        break
+            except Exception as exc:
+                logger.warning(f"Fallback search warning: {exc}")
+
         return records
 
     # ── Internal ──────────────────────────────────────────────────────

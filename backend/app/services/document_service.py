@@ -246,6 +246,12 @@ class DocumentService:
             extra={"document_id": row["document_id"], "size_bytes": row["size_bytes"]},
         )
 
+        try:
+            from app.infrastructure.postgres_bridge import persist_document_file
+            persist_document_file(storage_key, row["document_id"], owner, data)
+        except Exception:
+            pass
+
         # Automatically process and index the uploaded document in the background
         try:
             import threading
@@ -305,9 +311,22 @@ class DocumentService:
             raise NotFoundError("Document not found.")
         try:
             data = self._storage.download(row["storage_key"])
-        except Exception as exc:
-            logger.exception("document.download_failed")
-            raise FileProcessingError("Could not retrieve document content.") from exc
+        except Exception:
+            # Fall back to PostgreSQL if local disk storage was reset on container restart
+            data = None
+            try:
+                from app.infrastructure.postgres_bridge import get_document_file
+                data = get_document_file(row["storage_key"])
+                if data:
+                    try:
+                        self._storage.upload(row["storage_key"], data)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            if not data:
+                logger.exception("document.download_failed")
+                raise FileProcessingError("Could not retrieve document content.")
         return data, row
 
     def process_document(self, document_id: str, owner_id: str) -> Dict[str, Any]:
@@ -438,10 +457,30 @@ class DocumentService:
                 chunks=chunk_items,
                 project_id=row.get("project_id"),
             )
+            try:
+                from app.infrastructure.postgres_bridge import persist_document_chunks
+                persist_document_chunks(
+                    document_id=document_id,
+                    owner_id=owner_id,
+                    project_id=row.get("project_id"),
+                    chunks=chunk_items,
+                )
+            except Exception:
+                pass
             self._repository.update_status(document_id, owner_id, status="indexed")
             self._repository.update_chunk_count(document_id, owner_id, indexed_count)
         except Exception as exc:
             logger.warning(f"ChromaDB indexing warning: {exc}")
+            try:
+                from app.infrastructure.postgres_bridge import persist_document_chunks
+                persist_document_chunks(
+                    document_id=document_id,
+                    owner_id=owner_id,
+                    project_id=row.get("project_id"),
+                    chunks=chunk_items,
+                )
+            except Exception:
+                pass
             self._repository.update_status(document_id, owner_id, status="indexed")
             try:
                 self._repository.update_chunk_count(document_id, owner_id, len(chunk_items) or 1)
@@ -455,46 +494,76 @@ class DocumentService:
 
     def get_document_preview(self, document_id: str, owner_id: str) -> Dict[str, Any]:
         """Return structured preview of document text and pages for the Document Viewer panel."""
-        data, row = self.download(document_id, owner_id)
+        pages: List[Dict[str, Any]] = []
+        full_text = ""
+        row = None
+        data = None
+
+        try:
+            data, row = self.download(document_id, owner_id)
+        except Exception as exc:
+            logger.warning(f"Preview download failed for {document_id}: {exc}")
+            try:
+                row = self._repository.get(document_id, owner_id)
+            except Exception:
+                row = None
+
+        if not row:
+            raise NotFoundError("Document not found.")
+
         filename = row.get("original_filename", "")
         ext = Path(filename).suffix.lower()
 
-        pages: List[Dict[str, Any]] = []
-        full_text = ""
+        if data:
+            try:
+                import re
+                if ext in {".txt", ".md"}:
+                    text = data.decode("utf-8-sig", errors="replace")
+                    full_text = text
+                    pages.append({"page_number": 1, "text": text[:30000], "char_count": len(text)})
+                elif ext == ".docx":
+                    try:
+                        import docx
+                        doc = docx.Document(io.BytesIO(data))
+                        paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+                        full_text = "\n\n".join(paras)
+                        pages.append({"page_number": 1, "text": full_text[:30000], "char_count": len(full_text)})
+                    except Exception:
+                        full_text = data.decode("utf-8", errors="replace")
+                        pages.append({"page_number": 1, "text": full_text[:30000], "char_count": len(full_text)})
+                elif ext == ".pdf":
+                    try:
+                        import pypdf
+                        reader = pypdf.PdfReader(io.BytesIO(data))
+                        for p_idx, page in enumerate(reader.pages):
+                            ptxt = (page.extract_text() or "").strip()
+                            ptxt = re.sub(r"[ \t]+", " ", ptxt)
+                            pages.append({
+                                "page_number": p_idx + 1,
+                                "text": ptxt[:10000],
+                                "char_count": len(ptxt),
+                            })
+                        full_text = "\n\n".join(p["text"] for p in pages if p["text"])
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.warning(f"Document preview extraction error: {exc}")
 
-        try:
-            import re
-            if ext in {".txt", ".md"}:
-                text = data.decode("utf-8-sig", errors="replace")
-                full_text = text
-                pages.append({"page_number": 1, "text": text[:30000], "char_count": len(text)})
-            elif ext == ".docx":
-                try:
-                    import docx
-                    doc = docx.Document(io.BytesIO(data))
-                    paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-                    full_text = "\n\n".join(paras)
-                    pages.append({"page_number": 1, "text": full_text[:30000], "char_count": len(full_text)})
-                except Exception:
-                    full_text = data.decode("utf-8", errors="replace")
-                    pages.append({"page_number": 1, "text": full_text[:30000], "char_count": len(full_text)})
-            elif ext == ".pdf":
-                try:
-                    import pypdf
-                    reader = pypdf.PdfReader(io.BytesIO(data))
-                    for p_idx, page in enumerate(reader.pages):
-                        ptxt = (page.extract_text() or "").strip()
-                        ptxt = re.sub(r"[ \t]+", " ", ptxt)
+        # If pages could not be extracted from raw bytes, try reconstructing from chunks
+        if not pages:
+            try:
+                from app.infrastructure.postgres_bridge import get_document_chunks
+                chunks = get_document_chunks(document_id, owner_id)
+                if chunks:
+                    for c in chunks:
                         pages.append({
-                            "page_number": p_idx + 1,
-                            "text": ptxt[:10000],
-                            "char_count": len(ptxt),
+                            "page_number": c.get("page_number", 1),
+                            "text": c.get("content", ""),
+                            "char_count": len(c.get("content", "")),
                         })
-                    full_text = "\n\n".join(p["text"] for p in pages if p["text"])
-                except Exception:
-                    pass
-        except Exception as exc:
-            logger.warning(f"Document preview extraction error: {exc}")
+                    full_text = "\n\n".join(c.get("content", "") for c in chunks)
+            except Exception:
+                pass
 
         return {
             "document_id": document_id,

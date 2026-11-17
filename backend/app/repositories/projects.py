@@ -151,15 +151,34 @@ class ProjectRepository:
         created = self.get_project(project_id, owner_id)
         if created is None:  # pragma: no cover - insert just succeeded
             raise RuntimeError("Project insert was not readable back")
+        try:
+            from app.infrastructure.postgres_bridge import persist_project
+            persist_project(created)
+        except Exception:
+            pass
         return created
 
     def get_project(self, project_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
         self.ensure_schema()
-        return self._db.fetch_one(
+        row = self._db.fetch_one(
             f"SELECT {_PROJECT_COLUMNS} FROM projects "
             "WHERE project_id = ? AND owner_id = ?",
             (project_id, owner_id),
         )
+        if not row:
+            try:
+                from app.infrastructure.postgres_bridge import hydrate_sqlite_from_postgres
+                if hasattr(self._db, "_connection"):
+                    with self._db._connection() as conn:
+                        hydrate_sqlite_from_postgres(conn, user_id=owner_id)
+                row = self._db.fetch_one(
+                    f"SELECT {_PROJECT_COLUMNS} FROM projects "
+                    "WHERE project_id = ? AND owner_id = ?",
+                    (project_id, owner_id),
+                )
+            except Exception:
+                pass
+        return row
 
     def list_projects(
         self,
@@ -191,6 +210,20 @@ class ProjectRepository:
             f"SELECT COUNT(*) AS total FROM projects WHERE {clause}", params
         )
         total = int((total_row or {}).get("total", 0))
+
+        if total == 0:
+            try:
+                from app.infrastructure.postgres_bridge import hydrate_sqlite_from_postgres
+                if hasattr(self._db, "_connection"):
+                    with self._db._connection() as conn:
+                        hydrate_sqlite_from_postgres(conn, user_id=owner_id)
+                total_row = self._db.fetch_one(
+                    f"SELECT COUNT(*) AS total FROM projects WHERE {clause}", params
+                )
+                total = int((total_row or {}).get("total", 0))
+            except Exception:
+                pass
+
         rows = self._db.fetch_all(
             f"SELECT {_PROJECT_COLUMNS} FROM projects WHERE {clause} "
             f"ORDER BY {column} {direction}, project_id ASC LIMIT ? OFFSET ?",
@@ -217,7 +250,14 @@ class ProjectRepository:
             "WHERE project_id = ? AND owner_id = ?",
             (*updates.values(), project_id, owner_id),
         )
-        return self.get_project(project_id, owner_id)
+        updated = self.get_project(project_id, owner_id)
+        if updated:
+            try:
+                from app.infrastructure.postgres_bridge import persist_project
+                persist_project(updated)
+            except Exception:
+                pass
+        return updated
 
     def delete_project(self, project_id: str, owner_id: str) -> bool:
         self.ensure_schema()
@@ -237,6 +277,11 @@ class ProjectRepository:
                 "DELETE FROM projects WHERE project_id = ? AND owner_id = ?",
                 (project_id, owner_id),
             )
+        try:
+            from app.infrastructure.postgres_bridge import delete_project
+            delete_project(project_id, owner_id)
+        except Exception:
+            pass
         return True
 
     # ── Research sessions ─────────────────────────────────────────────────

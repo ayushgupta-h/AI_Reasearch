@@ -2446,21 +2446,24 @@ function DocumentChatMessageContent({ content, citations, onCite }: DocumentChat
 }
 
 interface DocumentChatWorkspaceProps {
-  document: DocumentRecord | null;
+  docRecord?: DocumentRecord | null;
+  document?: DocumentRecord | null;
   multiDocuments?: DocumentRecord[];
   projectMap: Map<string, string>;
   onBack: () => void;
 }
 
 function DocumentChatWorkspace({
-  document,
+  docRecord,
+  document: legacyDoc,
   multiDocuments = [],
   projectMap,
   onBack,
 }: DocumentChatWorkspaceProps) {
+  const activeDoc = docRecord || legacyDoc || null;
   const toast = useToast();
-  const isMulti = multiDocuments.length > 1 || !document;
-  const primaryDoc = document || multiDocuments[0];
+  const isMulti = multiDocuments.length > 1 || !activeDoc;
+  const primaryDoc = activeDoc || multiDocuments[0];
   const docId = primaryDoc ? (primaryDoc.document_id || primaryDoc.id || '') : '';
 
   // Document preview state
@@ -2624,8 +2627,13 @@ function DocumentChatWorkspace({
           loadConversations();
         }
       }
-    } catch (err) {
-      toast.push(apiError(err), 'error');
+    } catch (err: any) {
+      const msg = apiError(err);
+      if (msg.toLowerCase().includes('failed to fetch')) {
+        toast.push('Server connection timed out or is warming up. Please try again.', 'error');
+      } else {
+        toast.push(msg, 'error');
+      }
     } finally {
       setSending(false);
     }

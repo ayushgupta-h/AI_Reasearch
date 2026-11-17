@@ -30,18 +30,19 @@ _AUTH_ERRORS = {
     404: {"model": ApiError, "description": "Research session not found."},
 }
 
-# Accepts both 32-character hex and hyphenated UUID formats.
+# Accepts both 32-character hex and standard UUID formats.
 ResearchIdPath = Path(
     ...,
-    pattern=r"^[a-zA-Z0-9_-]+$",
-    description="Research session id.",
+    pattern=r"^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$",
+    description="Research session id (32-char hex or UUID).",
 )
 
 
-def _owner(current_user: Optional[dict]) -> str:
-    if not current_user:
-        return ""
-    return str(current_user.get("user_id") or "").strip()
+def _owner(current_user: dict) -> str:
+    owner = str(current_user.get("user_id") or "").strip()
+    if not owner:
+        raise AuthenticationError("Authentication required.")
+    return owner
 
 
 @router.get(
@@ -51,7 +52,7 @@ def _owner(current_user: Optional[dict]) -> str:
 )
 async def get_research(
     research_id: str = ResearchIdPath,
-    current_user: Optional[dict] = Depends(get_optional_user),
+    current_user: dict = Depends(get_current_user),
     service: ProjectService = Depends(get_project_service),
     session_service: SessionService = Depends(get_session_service),
 ) -> dict:

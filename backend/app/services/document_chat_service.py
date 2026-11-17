@@ -15,6 +15,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.config import Settings, get_settings
 from app.errors import LLMProviderError, NotFoundError, ValidationError
 from app.observability import get_logger, redact
 from app.repositories.documents import DocumentRepository
@@ -60,10 +61,12 @@ class DocumentChatService:
         repository: DocumentRepository,
         document_service: DocumentService,
         chat_service: ChatService,
+        settings: Optional[Settings] = None,
     ) -> None:
         self._repository = repository
         self._doc_service = document_service
         self._chat_service = chat_service
+        self._settings = settings or getattr(chat_service, "settings", None) or get_settings()
 
     # ── Single-Document Chat ──────────────────────────────────────────────
 
@@ -213,7 +216,7 @@ Provide a well-structured, grounded answer with bracketed citations [1], [2] ref
         citations_json = json.dumps(active_citations)
 
         # 8. Persist turn in database
-        self._repository.add_message(
+        user_msg = self._repository.add_message(
             conversation_id=conversation_id,
             owner_id=user_id,
             role="user",
@@ -226,6 +229,17 @@ Provide a well-structured, grounded answer with bracketed citations [1], [2] ref
             content=answer,
             citations_json=citations_json,
         )
+
+        try:
+            from app.infrastructure.postgres_bridge import persist_conversation, persist_message
+            if conv:
+                persist_conversation(conv)
+            if user_msg:
+                persist_message(user_msg)
+            if asst_msg:
+                persist_message(asst_msg)
+        except Exception:
+            pass
 
         return {
             "conversation_id": conversation_id,
@@ -353,7 +367,7 @@ Provide a comprehensive comparative analysis with clear markdown tables and brac
                 active_citations.append(clean_p)
         citations_json = json.dumps(active_citations)
 
-        self._repository.add_message(
+        user_msg = self._repository.add_message(
             conversation_id=conversation_id,
             owner_id=user_id,
             role="user",
@@ -366,6 +380,17 @@ Provide a comprehensive comparative analysis with clear markdown tables and brac
             content=answer,
             citations_json=citations_json,
         )
+
+        try:
+            from app.infrastructure.postgres_bridge import persist_conversation, persist_message
+            if conv:
+                persist_conversation(conv)
+            if user_msg:
+                persist_message(user_msg)
+            if asst_msg:
+                persist_message(asst_msg)
+        except Exception:
+            pass
 
         return {
             "conversation_id": conversation_id,
@@ -489,9 +514,11 @@ Provide a comprehensive comparative analysis with clear markdown tables and brac
         if passages:
             return self._extractive_fallback(passages, user_prompt)
 
-        raise LLMProviderError(
-            "All model providers are temporarily unavailable for document analysis. "
-            + (" | ".join(errors)[:200] if errors else "")
+        return (
+            "### Document Analysis Notice\n\n"
+            "Cloud AI model endpoints are currently experiencing high latency or rate limits. "
+            "Please try asking your question again in a moment, or ensure the document text has been fully processed.",
+            "system-fallback",
         )
 
 

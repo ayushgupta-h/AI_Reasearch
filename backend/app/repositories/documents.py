@@ -154,15 +154,34 @@ class DocumentRepository:
         row = self.get(document_id, owner_id)
         if row is None:  # pragma: no cover - insert just succeeded
             raise RuntimeError("Document insert was not readable back")
+        try:
+            from app.infrastructure.postgres_bridge import persist_document
+            persist_document(row)
+        except Exception:
+            pass
         return row
 
     def get(self, document_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
         self.ensure_schema()
-        return self._db.fetch_one(
+        row = self._db.fetch_one(
             f"SELECT {_COLUMNS} FROM documents "
             "WHERE document_id = ? AND owner_id = ?",
             (document_id, owner_id),
         )
+        if not row:
+            try:
+                from app.infrastructure.postgres_bridge import hydrate_sqlite_from_postgres
+                if hasattr(self._db, "_connection"):
+                    with self._db._connection() as conn:
+                        hydrate_sqlite_from_postgres(conn, user_id=owner_id)
+                row = self._db.fetch_one(
+                    f"SELECT {_COLUMNS} FROM documents "
+                    "WHERE document_id = ? AND owner_id = ?",
+                    (document_id, owner_id),
+                )
+            except Exception:
+                pass
+        return row
 
     def find_by_hash(self, owner_id: str, sha256: str) -> Optional[Dict[str, Any]]:
         self.ensure_schema()
@@ -221,6 +240,20 @@ class DocumentRepository:
             f"SELECT COUNT(*) AS total FROM documents WHERE {clause}", params
         )
         total = int((total_row or {}).get("total", 0))
+
+        if total == 0:
+            try:
+                from app.infrastructure.postgres_bridge import hydrate_sqlite_from_postgres
+                if hasattr(self._db, "_connection"):
+                    with self._db._connection() as conn:
+                        hydrate_sqlite_from_postgres(conn, user_id=owner_id)
+                total_row = self._db.fetch_one(
+                    f"SELECT COUNT(*) AS total FROM documents WHERE {clause}", params
+                )
+                total = int((total_row or {}).get("total", 0))
+            except Exception:
+                pass
+
         rows = self._db.fetch_all(
             f"SELECT {_COLUMNS} FROM documents WHERE {clause} "
             f"ORDER BY {column} {direction}, document_id ASC LIMIT ? OFFSET ?",
@@ -251,6 +284,13 @@ class DocumentRepository:
                 owner_id,
             ),
         )
+        try:
+            updated = self.get(document_id, owner_id)
+            if updated:
+                from app.infrastructure.postgres_bridge import persist_document
+                persist_document(updated)
+        except Exception:
+            pass
 
     def update_chunk_count(self, document_id: str, owner_id: str, chunk_count: int) -> None:
         self.ensure_schema()
@@ -258,6 +298,13 @@ class DocumentRepository:
             "UPDATE documents SET chunk_count = ?, updated_at = ? WHERE document_id = ? AND owner_id = ?",
             (chunk_count, utc_iso(), document_id, owner_id),
         )
+        try:
+            updated = self.get(document_id, owner_id)
+            if updated:
+                from app.infrastructure.postgres_bridge import persist_document
+                persist_document(updated)
+        except Exception:
+            pass
 
     def delete(self, document_id: str, owner_id: str) -> bool:
         self.ensure_schema()
@@ -265,6 +312,11 @@ class DocumentRepository:
             "DELETE FROM documents WHERE document_id = ? AND owner_id = ?",
             (document_id, owner_id),
         )
+        try:
+            from app.infrastructure.postgres_bridge import delete_document
+            delete_document(document_id, owner_id)
+        except Exception:
+            pass
         return affected > 0
 
     def get_stats(self, owner_id: str) -> Dict[str, int]:

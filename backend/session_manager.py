@@ -192,6 +192,12 @@ class SessionManager:
                         conn.execute(f"ALTER TABLE research_sessions ADD COLUMN {col_name} TEXT")
                     except Exception:
                         pass
+        try:
+            from app.infrastructure.postgres_bridge import hydrate_sqlite_from_postgres
+            with self._connect() as conn:
+                hydrate_sqlite_from_postgres(conn)
+        except Exception:
+            pass
 
     @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
@@ -287,6 +293,12 @@ class SessionManager:
         with self._connect() as conn:
             conn.execute(_INSERT_SESSION_SQL, row)
 
+        try:
+            from app.infrastructure.postgres_bridge import persist_session
+            persist_session(row)
+        except Exception:
+            pass
+
         console.print(
             f"  [dim green]💾 Session saved to DB: [cyan]{session_id[:8]}...[/cyan] (user={user_id or 'anon'})[/dim green]"
         )
@@ -301,6 +313,17 @@ class SessionManager:
                 rows = conn.execute(_SELECT_BY_USER_SQL, (user_id,)).fetchall()
             else:
                 rows = conn.execute(_SELECT_ALL_SQL).fetchall()
+
+        if not rows and user_id:
+            try:
+                from app.infrastructure.postgres_bridge import hydrate_sqlite_from_postgres
+                with self._connect() as conn:
+                    hydrate_sqlite_from_postgres(conn, user_id=user_id)
+                with self._connect() as conn:
+                    rows = conn.execute(_SELECT_BY_USER_SQL, (user_id,)).fetchall()
+            except Exception:
+                pass
+
         result = []
         for r in rows:
             d = dict(r)
@@ -327,6 +350,15 @@ class SessionManager:
         """Return a single session record by its full UUID, or None if not found or unauthorized."""
         with self._connect() as conn:
             row = conn.execute(_SELECT_ONE_SQL, (session_id,)).fetchone()
+        if not row and user_id:
+            try:
+                from app.infrastructure.postgres_bridge import hydrate_sqlite_from_postgres
+                with self._connect() as conn:
+                    hydrate_sqlite_from_postgres(conn, user_id=user_id)
+                with self._connect() as conn:
+                    row = conn.execute(_SELECT_ONE_SQL, (session_id,)).fetchone()
+            except Exception:
+                pass
         if not row:
             return None
         rec = dict(row)
@@ -385,6 +417,11 @@ class SessionManager:
                 cursor = conn.execute(_DELETE_USER_SESSION_SQL, (session_id, user_id))
             else:
                 cursor = conn.execute(_DELETE_ONE_SQL, (session_id,))
+        try:
+            from app.infrastructure.postgres_bridge import delete_session
+            delete_session(session_id, user_id=user_id)
+        except Exception:
+            pass
         return cursor.rowcount > 0
 
     def user_owns_report(self, user_id: str, report_filename: str) -> bool:
