@@ -2222,6 +2222,205 @@ export function ProjectsPage() {
  * SECTION 10 — DOCUMENTS (FULL UI IMPLEMENTATION + CHAT WITH DOCUMENTS)
  * ============================================================ */
 
+function formatDocumentChatMessage(raw: string): string {
+  if (!raw) return '';
+  let text = raw.trim();
+
+  // If text has code blocks, only process lines outside code blocks
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  for (let pIdx = 0; pIdx < parts.length; pIdx++) {
+    if (pIdx % 2 === 1) continue;
+
+    const lines = parts[pIdx].split('\n');
+    const formatted: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Check if line is a common section header
+      const isHeaderPattern = /^(Key Takeaways|Core Premise and Content Highlights|Core Premise|Content Highlights|Production Credits|Publication Details|Executive Summary|Overview|Summary|Conclusions?|Strategic Recommendations?|Methodology|Findings|Background|Analysis|Context)(?::)?$/i;
+
+      if (isHeaderPattern.test(line)) {
+        formatted.push('');
+        formatted.push(`### ${line.replace(/:$/, '')}`);
+        formatted.push('');
+        continue;
+      }
+
+      // If a line is formatted like "Label: Value" or "Label: Value [1]" without a bullet, turn it into "- **Label:** Value"
+      const labelMatch = /^([A-Z][A-Za-z0-9\s&/()_-]{1,40}):\s+(.+)$/.exec(line);
+      if (labelMatch && !line.startsWith('-') && !line.startsWith('*') && !line.startsWith('#')) {
+        formatted.push(`- **${labelMatch[1]}:** ${labelMatch[2]}`);
+        continue;
+      }
+
+      // If an un-bulleted sentence ends with a citation bracket (e.g. "Across tables... [6].")
+      if (/^[A-Z].*\[\d+\]\.\s*$/.test(line) && !line.startsWith('-') && !line.startsWith('*')) {
+        formatted.push(`- ${line}`);
+        continue;
+      }
+
+      formatted.push(lines[i]);
+    }
+
+    parts[pIdx] = formatted.join('\n');
+  }
+
+  text = parts.join('');
+
+  // Mark citations so [1], [2] become `[1]` for interactive buttons
+  const citationParts = text.split(/(```[\s\S]*?```|`[^`]*`)/g);
+  return citationParts
+    .map((p, i) => (i % 2 === 1 ? p : p.replace(/\[(\d+)\](?!\()/g, '`[$1]`')))
+    .join('');
+}
+
+interface DocumentChatMessageContentProps {
+  content: string;
+  citations?: any[];
+  onCite?: (num: number) => void;
+}
+
+function DocumentChatMessageContent({ content, citations, onCite }: DocumentChatMessageContentProps) {
+  const formattedContent = useMemo(() => formatDocumentChatMessage(content), [content]);
+
+  return (
+    <div className="space-y-3 leading-relaxed text-xs">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1({ children }) {
+            return (
+              <h3 className="font-serif text-base font-bold text-[#F4EBDD] mt-3.5 mb-2 pb-1 border-b border-[#302319] flex items-center gap-1.5">
+                {children}
+              </h3>
+            );
+          },
+          h2({ children }) {
+            return (
+              <h4 className="font-serif text-sm font-semibold text-[#E9D6B6] mt-3 mb-1.5 flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#C5A36A] shrink-0" />
+                <span>{children}</span>
+              </h4>
+            );
+          },
+          h3({ children }) {
+            return (
+              <h4 className="font-serif text-sm font-semibold text-[#E9D6B6] mt-3 mb-1.5 flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#C5A36A] shrink-0" />
+                <span>{children}</span>
+              </h4>
+            );
+          },
+          h4({ children }) {
+            return (
+              <h5 className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#C5A36A] mt-2.5 mb-1">
+                {children}
+              </h5>
+            );
+          },
+          p({ children }) {
+            return <p className="mb-2.5 leading-relaxed text-[#D6CBB8] text-xs last:mb-0">{children}</p>;
+          },
+          strong({ children }) {
+            return <strong className="font-semibold text-[#F4EBDD]">{children}</strong>;
+          },
+          em({ children }) {
+            return <em className="italic text-[#E9D6B6]">{children}</em>;
+          },
+          ul({ children }) {
+            return <ul className="my-2 space-y-1.5 pl-1 text-[#D6CBB8] list-none">{children}</ul>;
+          },
+          ol({ children }) {
+            return <ol className="my-2 space-y-1.5 pl-4 list-decimal text-[#D6CBB8] text-xs">{children}</ol>;
+          },
+          li({ children }) {
+            return (
+              <li className="flex items-start gap-2 text-xs leading-relaxed text-[#D6CBB8]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#C5A36A]/80 mt-1.5 shrink-0" />
+                <span className="flex-1">{children}</span>
+              </li>
+            );
+          },
+          blockquote({ children }) {
+            return (
+              <blockquote className="my-2.5 rounded-r-lg border-l-2 border-[#C5A36A] bg-[#1A140F] p-2.5 text-xs text-[#F4EBDD] italic shadow-xs">
+                {children}
+              </blockquote>
+            );
+          },
+          table({ children }) {
+            return (
+              <div className="my-3 overflow-hidden rounded-lg border border-[#453322] bg-[#14100D] shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">{children}</table>
+                </div>
+              </div>
+            );
+          },
+          thead({ children }) {
+            return (
+              <thead className="border-b border-[#453322] bg-[#221A13] text-[#E9D6B6] font-mono uppercase tracking-wider text-[10px]">
+                {children}
+              </thead>
+            );
+          },
+          th({ children }) {
+            return <th className="px-3 py-2 font-semibold text-[#F4EBDD] whitespace-nowrap">{children}</th>;
+          },
+          tbody({ children }) {
+            return <tbody className="divide-y divide-[#2B1E14]">{children}</tbody>;
+          },
+          tr({ children }) {
+            return (
+              <tr className="hover:bg-[#201811] transition-colors odd:bg-[#120F0C] even:bg-[#17120E]">{children}</tr>
+            );
+          },
+          td({ children }) {
+            return <td className="px-3 py-2 text-[#D8CEBF] leading-normal">{children}</td>;
+          },
+          code({ className, children, ...props }) {
+            const text = String(children ?? '');
+            const citationMatch = !className && /^\[(\d+)\]$/.exec(text.trim());
+
+            if (citationMatch) {
+              const citeNum = Number(citationMatch[1]);
+              return (
+                <button
+                  type="button"
+                  onClick={() => onCite?.(citeNum)}
+                  className="inline-flex items-center justify-center mx-0.5 px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-[#C5A36A]/15 text-[#C5A36A] border border-[#C5A36A]/40 hover:bg-[#C5A36A] hover:text-[#10100E] hover:border-[#C5A36A] transition-all cursor-pointer shadow-xs"
+                  title={`View cited passage [${citeNum}] in document`}
+                >
+                  [{citeNum}]
+                </button>
+              );
+            }
+
+            return (
+              <code
+                className="rounded bg-[#201A14] border border-[#3E2E20] px-1 py-0.5 font-mono text-[11px] text-[#E9D6B6]"
+                {...props}
+              >
+                {children}
+              </code>
+            );
+          },
+          pre({ children }) {
+            return (
+              <pre className="my-2.5 overflow-x-auto rounded-lg border border-[#3E2E20] bg-[#0E0C0A] p-3 font-mono text-[11px] text-[#E9D6B6]">
+                {children}
+              </pre>
+            );
+          },
+        }}
+      >
+        {formattedContent}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 interface DocumentChatWorkspaceProps {
   document: DocumentRecord | null;
   multiDocuments?: DocumentRecord[];
@@ -2421,28 +2620,6 @@ function DocumentChatWorkspace({
     toast.push('Copied to clipboard', 'success');
   };
 
-  const downloadDoc = async (id: string, filename: string) => {
-    try {
-      const token = getAccessToken();
-      const res = await fetch(`${API_BASE}/documents/${id}/download`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      toast.push('Download started.', 'success');
-    } catch (e) {
-      toast.push(apiError(e), 'error');
-    }
-  };
-
   const starterQuestions = [
     'Summarize this document and its key takeaways.',
     'What are the core conclusions and strategic recommendations?',
@@ -2491,16 +2668,6 @@ function DocumentChatWorkspace({
         </div>
 
         <div className="flex items-center gap-2">
-          {!isMulti && primaryDoc && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => downloadDoc(docId, primaryDoc.original_filename)}
-              title="Download original file"
-            >
-              <Download className="h-3.5 w-3.5" /> Download
-            </Button>
-          )}
           <Button variant="primary" size="sm" onClick={startNewChat}>
             <Plus className="h-3.5 w-3.5" /> New Chat
           </Button>
@@ -2608,22 +2775,6 @@ function DocumentChatWorkspace({
                 Grounded RAG
               </span>
             </div>
-
-            {conversations.length > 0 && !isMulti && (
-              <select
-                value={activeConvId || ''}
-                onChange={(e) => setActiveConvId(e.target.value || null)}
-                className="max-w-[180px] truncate rounded border border-[#302319] bg-[#10100E] px-2 py-1 text-xs text-[#E9D6B6] focus:outline-none focus:border-[#C5A36A]"
-                title="Previous chats"
-              >
-                <option value="">Current Thread</option>
-                {conversations.map((c) => (
-                  <option key={c.conversation_id} value={c.conversation_id}>
-                    {c.title}
-                  </option>
-                ))}
-              </select>
-            )}
           </div>
 
           {/* Conversation Message Feed */}
@@ -2678,11 +2829,19 @@ function DocumentChatWorkspace({
                       <p className="whitespace-pre-wrap">{m.content}</p>
                     ) : (
                       <div className="space-y-3">
-                        <div className="prose prose-invert prose-xs max-w-none">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {m.content}
-                          </ReactMarkdown>
-                        </div>
+                        <DocumentChatMessageContent
+                          content={m.content}
+                          citations={m.citations}
+                          onCite={(citeNum) => {
+                            const found = m.citations?.find((c) => c.index === citeNum);
+                            if (found) {
+                              setActiveCitation(found);
+                              if (found.page_number && typeof found.page_number === 'number') {
+                                setActivePage(found.page_number);
+                              }
+                            }
+                          }}
+                        />
 
                         {/* Citation Badges */}
                         {m.citations && m.citations.length > 0 && (
@@ -2691,26 +2850,29 @@ function DocumentChatWorkspace({
                               Sources & Citations:
                             </span>
                             <div className="flex flex-wrap gap-1.5">
-                              {m.citations.map((c, cIdx) => (
-                                <button
-                                  key={cIdx}
-                                  onClick={() => {
-                                    setActiveCitation(c);
-                                    if (c.page_number && typeof c.page_number === 'number') {
-                                      setActivePage(c.page_number);
-                                    }
-                                  }}
-                                  className={cn(
-                                    'inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-mono transition-colors border',
-                                    activeCitation?.index === c.index
-                                      ? 'bg-[#C5A36A] text-[#10100E] font-bold border-[#C5A36A]'
-                                      : 'bg-[#C5A36A]/10 text-[#C5A36A] border-[#C5A36A]/30 hover:bg-[#C5A36A]/20'
-                                  )}
-                                  title={c.snippet || c.text || 'View cited passage'}
-                                >
-                                  [{c.index}] {c.filename} {c.page_number ? `· p.${c.page_number}` : ''}
-                                </button>
-                              ))}
+                              {m.citations.map((c, cIdx) => {
+                                const cleanFilename = (c.filename || 'Document').replace(/^.*[\\\/]/, '');
+                                return (
+                                  <button
+                                    key={cIdx}
+                                    onClick={() => {
+                                      setActiveCitation(c);
+                                      if (c.page_number && typeof c.page_number === 'number') {
+                                        setActivePage(c.page_number);
+                                      }
+                                    }}
+                                    className={cn(
+                                      'inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-mono transition-colors border',
+                                      activeCitation?.index === c.index
+                                        ? 'bg-[#C5A36A] text-[#10100E] font-bold border-[#C5A36A]'
+                                        : 'bg-[#C5A36A]/10 text-[#C5A36A] border-[#C5A36A]/30 hover:bg-[#C5A36A]/20'
+                                    )}
+                                    title={c.snippet || c.text || 'View cited passage'}
+                                  >
+                                    [{c.index}] {cleanFilename} {c.page_number ? `· p.${c.page_number}` : ''}
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -2862,28 +3024,6 @@ export function DocumentsPage() {
       toast.push(apiError(err), 'error');
     } finally {
       setProcessingId(null);
-    }
-  };
-
-  const downloadDoc = async (id: string, filename: string) => {
-    try {
-      const token = getAccessToken();
-      const res = await fetch(`${API_BASE}/documents/${id}/download`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      toast.push('Download started.', 'success');
-    } catch (e) {
-      toast.push(apiError(e), 'error');
     }
   };
 
@@ -3090,13 +3230,6 @@ export function DocumentsPage() {
                           </button>
                         )}
                         <button
-                          onClick={() => downloadDoc(docId, d.original_filename)}
-                          className="p-1.5 text-[#817463] hover:text-[#F4EBDD] hover:bg-[#302319]/50 rounded"
-                          title="Download Document"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                        </button>
-                        <button
                           onClick={() => setPreviewDoc(d)}
                           className="p-1.5 text-[#817463] hover:text-[#C5A36A] hover:bg-[#302319]/50 rounded"
                           title="View Details"
@@ -3172,9 +3305,6 @@ export function DocumentsPage() {
                   }}
                 >
                   <MessageSquare className="h-4 w-4" /> Open Document Chat
-                </Button>
-                <Button onClick={() => downloadDoc(docId, previewDoc.original_filename)}>
-                  <Download className="h-4 w-4" /> Download File
                 </Button>
               </div>
             </div>

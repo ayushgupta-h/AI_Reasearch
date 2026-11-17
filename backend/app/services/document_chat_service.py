@@ -11,6 +11,7 @@ and persistent conversation history.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -30,11 +31,13 @@ RULES:
 1. Base your answer EXCLUSIVELY on the provided document excerpts and context passages.
 2. If the excerpts do not contain sufficient information to answer the question, state clearly: "Based on the provided document passages, this information is not specified." Do not hallucinate or extrapolate beyond what is stated.
 3. Every factual claim, number, statistic, or quote MUST be supported by an inline citation bracket matching the source passage number (e.g. [1], [2]).
-4. Structure your response professionally:
-   - Use concise executive summaries or direct answers first.
-   - Use clear markdown headings (##, ###) where appropriate.
-   - Use bullet points and formatted tables for comparisons, statistics, and structured data.
-   - Bold key financial figures, percentages, dates, and conclusions.
+4. Structure your response professionally using clean GitHub-flavored Markdown:
+   - Provide a direct answer or executive takeaway first.
+   - Use clear markdown section headers (### Section Name) to divide distinct themes.
+   - Format lists with markdown bullet points (- **Item / Concept:** Details [1]). Never output an unformatted wall of text or plain run-on lines.
+   - For publication metadata, credits, statistics, or metrics, format them cleanly into bullet points or a markdown table.
+   - Always leave blank lines between headings, paragraphs, and list blocks.
+   - Bold critical concepts, entity names, figures, and conclusions.
 5. Maintain conversational context across follow-up queries while keeping factual claims strictly tied to the source text.
 """
 
@@ -44,7 +47,7 @@ Your task is to analyze and compare multiple documents provided by the user.
 RULES:
 1. Synthesize findings across the documents, clearly attributing facts to each specific document using citations (e.g. [1], [2]).
 2. Highlight areas of agreement, contrasting points, and gaps between the documents.
-3. Use formatted comparison tables and structured bullet points.
+3. Structure your response with clear markdown headings (### Section Title) and formatted comparison tables or bullet points.
 4. If a document does not address a point, explicitly mention that.
 5. Never invent or speculate facts not present in the excerpts.
 """
@@ -82,7 +85,8 @@ class DocumentChatService:
         if not doc_row:
             raise NotFoundError("Document not found or access denied.")
 
-        filename = doc_row.get("original_filename", "document")
+        raw_name = doc_row.get("original_filename", "document")
+        filename = os.path.basename(raw_name.replace("\\", "/"))
         project_id = doc_row.get("project_id")
 
         # 2. Conversation management
@@ -202,7 +206,9 @@ Provide a well-structured, grounded answer with bracketed citations [1], [2] ref
         for p in passages:
             tag = f"[{p['index']}]"
             if tag in answer or len(passages) <= 2:
-                active_citations.append(p)
+                clean_p = dict(p)
+                clean_p["filename"] = os.path.basename((clean_p.get("filename") or "document").replace("\\", "/"))
+                active_citations.append(clean_p)
 
         citations_json = json.dumps(active_citations)
 
@@ -278,7 +284,7 @@ Provide a well-structured, grounded answer with bracketed citations [1], [2] ref
         p_idx = 1
 
         for did, drow in doc_rows.items():
-            fname = drow.get("original_filename", "document")
+            fname = os.path.basename((drow.get("original_filename", "document")).replace("\\", "/"))
             mems = []
             try:
                 mems = store.search_memories(
@@ -339,9 +345,12 @@ Provide a comprehensive comparative analysis with clear markdown tables and brac
 
         answer, provider = self._execute_chat(MULTI_DOC_SYSTEM_PROMPT, user_prompt, passages=passages)
 
-        active_citations = [
-            p for p in passages if f"[{p['index']}]" in answer or len(passages) <= len(document_ids)
-        ]
+        active_citations = []
+        for p in passages:
+            if f"[{p['index']}]" in answer or len(passages) <= len(document_ids):
+                clean_p = dict(p)
+                clean_p["filename"] = os.path.basename((clean_p.get("filename") or "document").replace("\\", "/"))
+                active_citations.append(clean_p)
         citations_json = json.dumps(active_citations)
 
         self._repository.add_message(
