@@ -17,11 +17,13 @@ Three collection tiers:
 
 A memory written at one tier is retrievable from that tier and all broader
 tiers (e.g. session memory is visible within its project and user scope).
+All stored customer content is encrypted with authenticated AES-256-GCM.
 """
 
 from __future__ import annotations
 
 import hashlib
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +36,14 @@ from knowledge_base import (
     _get_embeddings,
     _make_doc_id,
 )
+
+try:
+    from crypto_utils import encrypt_text, decrypt_text
+except ImportError:
+    root_dir = str(Path(__file__).resolve().parent.parent.parent)
+    if root_dir not in sys.path:
+        sys.path.insert(0, root_dir)
+    from crypto_utils import encrypt_text, decrypt_text
 
 logger = get_logger("app.memory.store")
 
@@ -77,7 +87,9 @@ class ResearchMemoryStore:
         self._session_id = session_id
         self._embeddings = _get_embeddings()
         self._vectorstore = None  # lazy
+        self._user_vectorstore = None  # lazy
         self._collection_name = self._collection_name_for_level()
+        self._user_collection_name = f"rai-mem-user-{_id_hash(self._user_id)}"
 
     # ── Collection naming ──────────────────────────────────────────────
 
@@ -91,11 +103,7 @@ class ResearchMemoryStore:
 
     # ── ChromaDB access ────────────────────────────────────────────────
 
-    def _get_vectorstore(self):
-        """Lazy-initialise the ChromaDB LangChain vectorstore for this scope."""
-        if self._vectorstore is not None:
-            return self._vectorstore
-
+    def _create_vectorstore(self, collection_name: str):
         try:
             from langchain_chroma import Chroma  # type: ignore
         except ImportError:
@@ -113,22 +121,32 @@ class ResearchMemoryStore:
                 database=chroma_database,
                 api_key=chroma_api_key,
             )
-            self._vectorstore = Chroma(
+            return Chroma(
                 client=chroma_client,
-                collection_name=self._collection_name,
+                collection_name=collection_name,
                 embedding_function=self._embeddings,
             )
         else:
-            from pathlib import Path
-
             Path(self._settings.chroma_dir).mkdir(parents=True, exist_ok=True)
-            self._vectorstore = Chroma(
-                collection_name=self._collection_name,
+            return Chroma(
+                collection_name=collection_name,
                 embedding_function=self._embeddings,
                 persist_directory=str(self._settings.chroma_dir),
             )
 
+    def _get_vectorstore(self):
+        """Lazy-initialise the ChromaDB LangChain vectorstore for this scope."""
+        if self._vectorstore is None:
+            self._vectorstore = self._create_vectorstore(self._collection_name)
         return self._vectorstore
+
+    def _get_user_vectorstore(self):
+        """Vectorstore for user master collection containing all user knowledge."""
+        if self._collection_name == self._user_collection_name:
+            return self._get_vectorstore()
+        if self._user_vectorstore is None:
+            self._user_vectorstore = self._create_vectorstore(self._user_collection_name)
+        return self._user_vectorstore
 
     # ── Metadata helpers ──────────────────────────────────────────────
 
@@ -170,7 +188,7 @@ class ResearchMemoryStore:
         confidence: Optional[float] = None,
         extra_metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Embed and store *content* as a memory record.
+        """Embed and store *content* as a memory record with AES-256-GCM encryption.
 
         Returns the ChromaDB document ID.
         """
@@ -185,6 +203,7 @@ class ResearchMemoryStore:
             verification_status=verification_status,
             created_at=created_at,
         )
+        metadata["source_type"] = "research"
         if confidence is not None:
             metadata["confidence"] = str(confidence)
         if extra_metadata:
@@ -197,13 +216,101 @@ class ResearchMemoryStore:
             chunks = [content]
 
         doc_id = f"mem-{memory_id}"
+        embeddings = self._embeddings.embed_documents([chunks[0]])
+        encrypted_text = encrypt_text(chunks[0])
+
         vs._collection.upsert(
             ids=[doc_id],
-            documents=[chunks[0]],
-            embeddings=self._embeddings.embed_documents([chunks[0]]),
+            documents=[encrypted_text],
+            embeddings=embeddings,
             metadatas=[metadata],
         )
+        if self._collection_name != self._user_collection_name:
+            user_vs = self._get_user_vectorstore()
+            user_vs._collection.upsert(
+                ids=[doc_id],
+                documents=[encrypted_text],
+                embeddings=embeddings,
+                metadatas=[metadata],
+            )
         return doc_id
+
+    def add_document_chunks(
+        self,
+        *,
+        document_id: str,
+        filename: str,
+        chunks: List[str],
+        project_id: Optional[str] = None,
+        source_label: Optional[str] = None,
+    ) -> int:
+        """Embed, encrypt, and store document chunks into ChromaDB."""
+        if not chunks:
+            return 0
+        proj_id = project_id or self._project_id or ""
+        created_at = _utcnow_iso()
+        ids: List[str] = []
+        encrypted_docs: List[str] = []
+        metadatas: List[Dict[str, Any]] = []
+
+        for idx, chunk in enumerate(chunks):
+            chunk_id = f"doc-{document_id}-chk-{idx}"
+            ids.append(chunk_id)
+            encrypted_docs.append(encrypt_text(chunk))
+            meta = {
+                "user_id": self._user_id,
+                "document_id": document_id,
+                "filename": filename,
+                "title": source_label or filename,
+                "chunk_index": str(idx),
+                "total_chunks": str(len(chunks)),
+                "source_type": "document",
+                "content_type": "document_chunk",
+                "verification_status": "verified",
+                "created_at": created_at,
+            }
+            if proj_id:
+                meta["project_id"] = proj_id
+            metadatas.append(meta)
+
+        embeddings = self._embeddings.embed_documents(chunks)
+
+        vs = self._get_vectorstore()
+        vs._collection.upsert(
+            ids=ids,
+            documents=encrypted_docs,
+            embeddings=embeddings,
+            metadatas=metadatas,
+        )
+        if self._collection_name != self._user_collection_name:
+            user_vs = self._get_user_vectorstore()
+            user_vs._collection.upsert(
+                ids=ids,
+                documents=encrypted_docs,
+                embeddings=embeddings,
+                metadatas=metadatas,
+            )
+        return len(chunks)
+
+    def delete_document_chunks(self, *, document_id: str) -> int:
+        """Purge all chunks associated with a deleted document."""
+        target_stores = [self._get_vectorstore()]
+        if self._collection_name != self._user_collection_name:
+            target_stores.append(self._get_user_vectorstore())
+
+        deleted_count = 0
+        for vs in target_stores:
+            try:
+                res = vs._collection.get(
+                    where={"document_id": {"$eq": document_id}},
+                    include=["metadatas"]
+                )
+                if res and res.get("ids"):
+                    vs._collection.delete(ids=res["ids"])
+                    deleted_count = max(deleted_count, len(res["ids"]))
+            except Exception as exc:
+                logger.warning(f"Failed deleting chunks for doc {document_id}: {exc}")
+        return deleted_count
 
     def update_memory(
         self,
@@ -214,59 +321,89 @@ class ResearchMemoryStore:
         confidence: Optional[float] = None,
         extra_metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """Update an existing memory record's metadata/content.
-
-        Returns ``True`` if a record was updated, ``False`` if none matched.
-        """
-        vs = self._get_vectorstore()
+        """Update an existing memory record's metadata/content."""
         doc_id = f"mem-{memory_id}"
-        existing = vs._collection.get(ids=[doc_id])
-        if not existing or not existing.get("ids"):
-            return False
+        updated_any = False
+        target_stores = [self._get_vectorstore()]
+        if self._collection_name != self._user_collection_name:
+            target_stores.append(self._get_user_vectorstore())
 
-        metadata = dict(existing["metadatas"][0]) if existing.get("metadatas") else {}
-        if verification_status is not None:
-            metadata["verification_status"] = verification_status
-        if confidence is not None:
-            metadata["confidence"] = str(confidence)
-        if extra_metadata:
-            for key, value in extra_metadata.items():
-                if value is not None:
-                    metadata[str(key)] = str(value)
-        metadata["updated_at"] = _utcnow_iso()
+        for vs in target_stores:
+            try:
+                existing = vs._collection.get(ids=[doc_id])
+                if not existing or not existing.get("ids"):
+                    continue
 
-        documents = existing.get("documents") or [""]
-        new_text = content if content is not None else documents[0]
+                metadata = dict(existing["metadatas"][0]) if existing.get("metadatas") else {}
+                if verification_status is not None:
+                    metadata["verification_status"] = verification_status
+                if confidence is not None:
+                    metadata["confidence"] = str(confidence)
+                if extra_metadata:
+                    for key, value in extra_metadata.items():
+                        if value is not None:
+                            metadata[str(key)] = str(value)
+                metadata["updated_at"] = _utcnow_iso()
 
-        vs._collection.upsert(
-            ids=[doc_id],
-            documents=[new_text],
-            embeddings=self._embeddings.embed_documents([new_text]),
-            metadatas=[metadata],
-        )
-        return True
+                if content is not None:
+                    new_text = content
+                    new_emb = self._embeddings.embed_documents([new_text])
+                    enc_text = encrypt_text(new_text)
+                    vs._collection.upsert(
+                        ids=[doc_id],
+                        documents=[enc_text],
+                        embeddings=new_emb,
+                        metadatas=[metadata],
+                    )
+                else:
+                    vs._collection.update(
+                        ids=[doc_id],
+                        metadatas=[metadata],
+                    )
+                updated_any = True
+            except Exception as exc:
+                logger.warning(f"Error updating memory {doc_id}: {exc}")
+
+        return updated_any
 
     def delete_memory(self, *, memory_id: str) -> bool:
         """Delete a memory record by ID. Returns ``True`` if deleted."""
-        vs = self._get_vectorstore()
         doc_id = f"mem-{memory_id}"
-        existing = vs._collection.get(ids=[doc_id])
-        if not existing or not existing.get("ids"):
-            return False
-        vs._collection.delete(ids=[doc_id])
-        return True
+        deleted = False
+        target_stores = [self._get_vectorstore()]
+        if self._collection_name != self._user_collection_name:
+            target_stores.append(self._get_user_vectorstore())
+
+        for vs in target_stores:
+            try:
+                existing = vs._collection.get(ids=[doc_id])
+                if existing and existing.get("ids"):
+                    vs._collection.delete(ids=[doc_id])
+                    deleted = True
+            except Exception:
+                pass
+        return deleted
 
     def get_memory(self, *, memory_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch one memory record by ID."""
-        vs = self._get_vectorstore()
+        """Fetch one memory record by ID with decrypted content."""
         doc_id = f"mem-{memory_id}"
+        vs = self._get_user_vectorstore()
         result = vs._collection.get(ids=[doc_id], include=["documents", "metadatas"])
         if not result or not result.get("ids"):
+            vs = self._get_vectorstore()
+            result = vs._collection.get(ids=[doc_id], include=["documents", "metadatas"])
+        if not result or not result.get("ids"):
             return None
+
+        meta = result["metadatas"][0] if result.get("metadatas") else {}
+        if meta.get("user_id") != self._user_id:
+            return None
+
+        raw_content = result["documents"][0] if result.get("documents") else ""
         return {
             "id": result["ids"][0],
-            "content": result["documents"][0] if result.get("documents") else "",
-            "metadata": result["metadatas"][0] if result.get("metadatas") else {},
+            "content": decrypt_text(raw_content),
+            "metadata": meta,
         }
 
     # ── Retrieval ─────────────────────────────────────────────────────
@@ -276,117 +413,209 @@ class ResearchMemoryStore:
         *,
         query: str,
         k: int = 6,
+        source_type: Optional[str] = None,
         content_type: Optional[str] = None,
         verification_status: Optional[str] = None,
         project_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        include_unverified: bool = False,
+        include_unverified: bool = True,
     ) -> List[Dict[str, Any]]:
         """
-        Semantically search memory for *query*, scoped by ownership.
-
-        Results are filtered to this store's user scope (and project/session
-        if configured on the store). Additional optional filters narrow by
-        content type, verification status, project or session.
+        Semantically search memory for *query*, scoped by ownership and decrypted.
         """
-        vs = self._get_vectorstore()
-        filter_meta: Dict[str, Any] = {"user_id": {"$eq": self._user_id}}
+        target_vs = (
+            self._get_user_vectorstore()
+            if (not self._project_id and not self._session_id)
+            else self._get_vectorstore()
+        )
 
-        if self._project_id:
-            filter_meta["project_id"] = {"$eq": self._project_id}
-        if self._session_id:
-            filter_meta["session_id"] = {"$eq": self._session_id}
-        if project_id:
-            filter_meta["project_id"] = {"$eq": project_id}
-        if session_id:
-            filter_meta["session_id"] = {"$eq": session_id}
+        filter_meta: Dict[str, Any] = {"user_id": {"$eq": self._user_id}}
+        active_proj = project_id or self._project_id
+        active_sess = session_id or self._session_id
+
+        if active_proj:
+            filter_meta["project_id"] = {"$eq": active_proj}
+        if active_sess:
+            filter_meta["session_id"] = {"$eq": active_sess}
         if content_type:
             filter_meta["content_type"] = {"$eq": content_type}
-        if verification_status:
-            filter_meta["verification_status"] = {"$eq": verification_status}
-        if not include_unverified:
-            # Prefer verified / non-unverified findings by default.
-            filter_meta["$and"] = [
-                filter_meta,
-                {
-                    "verification_status": {
-                        "$in": ["verified", "partially_verified", "contradicted"],
-                    }
-                },
-            ]
 
         try:
-            docs = vs.similarity_search(query, k=k, filter=filter_meta)
-        except Exception as exc:  # Chroma filter quirks — degrade gracefully
+            docs = target_vs.similarity_search(query, k=max(k * 2, 10), filter=filter_meta)
+        except Exception as exc:
             logger.warning("memory.search_filter_failed", extra={"error": str(exc)})
-            docs = vs.similarity_search(query, k=k)
+            docs = target_vs.similarity_search(query, k=max(k * 2, 10))
 
         results: List[Dict[str, Any]] = []
         for d in docs:
             meta = d.metadata or {}
-            # Enforce ownership at read time regardless of Chroma filter.
+            # Enforce ownership strictly at read time
             if meta.get("user_id") != self._user_id:
                 continue
-            if self._project_id and meta.get("project_id") != self._project_id:
+            if active_proj and meta.get("project_id") != active_proj:
                 continue
-            if self._session_id and meta.get("session_id") != self._session_id:
+            if active_sess and meta.get("session_id") != active_sess:
                 continue
+            if content_type and meta.get("content_type") != content_type:
+                continue
+
+            # Filter by source_type (all / document / research)
+            if source_type and source_type != "all":
+                is_doc = meta.get("source_type") == "document" or meta.get("content_type") == "document_chunk"
+                if source_type == "document" and not is_doc:
+                    continue
+                if source_type == "research" and is_doc:
+                    continue
+
+            # Filter by verification_status
+            if verification_status and verification_status != "all":
+                if verification_status == "verified" and meta.get("verification_status") not in {"verified", "partially_verified"}:
+                    continue
+                elif verification_status != "verified" and meta.get("verification_status") != verification_status:
+                    continue
+            elif not include_unverified:
+                if meta.get("verification_status") not in {"verified", "partially_verified", "contradicted"}:
+                    continue
+
+            decrypted_content = decrypt_text(d.page_content)
+            clean_id = meta.get("chroma_id") or meta.get("document_id") or (d.metadata.get("id") if hasattr(d, "metadata") else "") or ""
             results.append(
                 {
-                    "id": meta.get("chroma_id", ""),
-                    "content": d.page_content,
+                    "id": clean_id,
+                    "content": decrypted_content,
                     "metadata": meta,
                     "score": None,
                 }
             )
+            if len(results) >= k:
+                break
+
         return results
 
     def list_memories(
         self,
         *,
+        source_type: Optional[str] = None,
         project_id: Optional[str] = None,
         session_id: Optional[str] = None,
         verification_status: Optional[str] = None,
         content_type: Optional[str] = None,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
-        """List memory records for this scope, newest first."""
-        vs = self._get_vectorstore()
+        """List memory records for this scope, decrypted and newest first."""
+        target_vs = (
+            self._get_user_vectorstore()
+            if (not self._project_id and not self._session_id)
+            else self._get_vectorstore()
+        )
         where: Dict[str, Any] = {"user_id": {"$eq": self._user_id}}
-        if self._project_id:
-            where["project_id"] = {"$eq": self._project_id}
-        if self._session_id:
-            where["session_id"] = {"$eq": self._session_id}
-        if project_id:
-            where["project_id"] = {"$eq": project_id}
-        if session_id:
-            where["session_id"] = {"$eq": session_id}
-        if verification_status:
-            where["verification_status"] = {"$eq": verification_status}
+        active_proj = project_id or self._project_id
+        active_sess = session_id or self._session_id
+        if active_proj:
+            where["project_id"] = {"$eq": active_proj}
+        if active_sess:
+            where["session_id"] = {"$eq": active_sess}
         if content_type:
             where["content_type"] = {"$eq": content_type}
 
         try:
-            result = vs._collection.get(
+            result = target_vs._collection.get(
                 where=where,
-                limit=limit,
+                limit=limit * 2,
                 include=["documents", "metadatas"],
             )
-        except Exception as exc:  # pragma: no cover - Chroma quirks
+        except Exception as exc:
             logger.warning("memory.list_failed", extra={"error": str(exc)})
-            return []
+            try:
+                result = target_vs._collection.get(
+                    limit=limit * 2,
+                    include=["documents", "metadatas"],
+                )
+            except Exception:
+                return []
 
         records: List[Dict[str, Any]] = []
-        for i, doc_id in enumerate(result.get("ids", [])):
+        raw_ids = result.get("ids", [])
+        raw_docs = result.get("documents", [])
+        raw_metas = result.get("metadatas", [])
+
+        for i, doc_id in enumerate(raw_ids):
+            meta = raw_metas[i] if i < len(raw_metas) else {}
+            if meta.get("user_id") != self._user_id:
+                continue
+            if active_proj and meta.get("project_id") != active_proj:
+                continue
+            if active_sess and meta.get("session_id") != active_sess:
+                continue
+            if content_type and meta.get("content_type") != content_type:
+                continue
+
+            if source_type and source_type != "all":
+                is_doc = meta.get("source_type") == "document" or meta.get("content_type") == "document_chunk"
+                if source_type == "document" and not is_doc:
+                    continue
+                if source_type == "research" and is_doc:
+                    continue
+
+            if verification_status and verification_status != "all":
+                if verification_status == "verified" and meta.get("verification_status") not in {"verified", "partially_verified"}:
+                    continue
+                elif verification_status != "verified" and meta.get("verification_status") != verification_status:
+                    continue
+
+            raw_txt = raw_docs[i] if i < len(raw_docs) else ""
+            clean_id = doc_id.replace("mem-", "", 1) if doc_id.startswith("mem-") else doc_id
             records.append(
                 {
-                    "id": doc_id.replace("mem-", "", 1),
-                    "content": (result.get("documents") or [""])[i],
-                    "metadata": (result.get("metadatas") or [{}])[i],
+                    "id": clean_id,
+                    "content": decrypt_text(raw_txt),
+                    "metadata": meta,
                 }
             )
+            if len(records) >= limit:
+                break
+
         records.sort(key=lambda r: r["metadata"].get("created_at", ""), reverse=True)
         return records
+
+    def get_stats(self) -> Dict[str, int]:
+        """Aggregate real-time knowledge base metrics for the authenticated user."""
+        target_vs = self._get_user_vectorstore()
+        try:
+            result = target_vs._collection.get(
+                where={"user_id": {"$eq": self._user_id}},
+                include=["metadatas"],
+            )
+            metas = result.get("metadatas") or []
+            doc_ids = set()
+            session_ids = set()
+            total_chunks = 0
+            total_memories = 0
+            for m in metas:
+                if not m:
+                    continue
+                if m.get("document_id"):
+                    doc_ids.add(m["document_id"])
+                if m.get("session_id"):
+                    session_ids.add(m["session_id"])
+                if m.get("source_type") == "document" or m.get("content_type") == "document_chunk":
+                    total_chunks += 1
+                else:
+                    total_memories += 1
+            return {
+                "total_documents": len(doc_ids),
+                "total_chunks": total_chunks,
+                "total_memories": total_memories,
+                "contributing_sessions": len(session_ids),
+            }
+        except Exception as exc:
+            logger.warning("memory.get_stats_failed", extra={"error": str(exc)})
+            return {
+                "total_documents": 0,
+                "total_chunks": 0,
+                "total_memories": 0,
+                "contributing_sessions": 0,
+            }
 
 
 __all__ = ["ResearchMemoryStore"]

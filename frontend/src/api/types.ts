@@ -135,13 +135,30 @@ export interface ContradictionRecord {
   evidence?: Array<{ evidence_id: string; side: string; weight?: number }>;
 }
 
+export interface KnowledgeStats {
+  total_documents: number;
+  total_chunks: number;
+  total_memories: number;
+  contributing_sessions: number;
+}
+
 export interface MemoryRecord {
   memory_id?: string;
   id?: string;
   content?: string;
+  content_text?: string;
+  content_type?: string;
+  source_type?: 'document' | 'research';
+  verification_status?: string;
+  confidence?: number;
+  document_id?: string;
+  filename?: string;
   topic?: string;
   query?: string;
   summary?: string;
+  session_id?: string;
+  project_id?: string;
+  source_id?: string;
   tags?: string[];
   created_at?: string;
   [key: string]: unknown;

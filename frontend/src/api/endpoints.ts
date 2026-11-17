@@ -95,11 +95,21 @@ export const API = {
   },
   memory: {
     search: '/memory/search',
+    stats: '/memory/stats',
     list: '/memory',
     create: '/memory',
     get: (id: string) => `/memory/${id}`,
     update: (id: string) => `/memory/${id}`,
     delete: (id: string) => `/memory/${id}`,
+  },
+  knowledge: {
+    search: '/knowledge/search',
+    stats: '/knowledge/stats',
+    list: '/knowledge',
+    create: '/knowledge',
+    get: (id: string) => `/knowledge/${id}`,
+    update: (id: string) => `/knowledge/${id}`,
+    delete: (id: string) => `/knowledge/${id}`,
   },
   completeness: {
     evaluate: (id: string) => `/research/${id}/completeness/evaluate`,

@@ -1,11 +1,12 @@
 """
 app/api/memory.py
 =================
-Research memory API endpoints.
+Research memory & persistent knowledge base API endpoints.
 
 All endpoints are owner-scoped: callers can only create, read, update or
 delete memory records that belong to them (and optionally their project /
-research session).
+research session). Supports unified querying of both document chunks and
+research findings.
 """
 
 from __future__ import annotations
@@ -20,12 +21,13 @@ from app.security.dependencies import get_current_user
 from app.services.container import get_memory_service
 from app.services.research_memory_service import MemoryRecord, ResearchMemoryService
 
-router = APIRouter(tags=["Research Memory"])
+router = APIRouter(tags=["Research Memory & Knowledge Base"])
 
 MemoryIdPath = Path(
     ...,
-    pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-    description="UUID memory id.",
+    min_length=1,
+    max_length=128,
+    description="Unique record identifier (UUID, chunk ID, or Chroma ID).",
 )
 
 
@@ -37,6 +39,46 @@ def _owner(current_user: dict) -> str:
 
 
 @router.get(
+    "/knowledge/stats",
+    response_model=dict,
+    responses={
+        401: {"model": ApiError, "description": "Authentication required."},
+    },
+    summary="Get persistent knowledge base statistics",
+)
+@router.get(
+    "/memory/stats",
+    response_model=dict,
+    responses={
+        401: {"model": ApiError, "description": "Authentication required."},
+    },
+    summary="Get persistent research memory statistics",
+)
+async def get_knowledge_stats(
+    current_user: dict = Depends(get_current_user),
+    service: ResearchMemoryService = Depends(get_memory_service),
+) -> dict:
+    """Return live summary counts of indexed documents, chunks, memories, and sessions."""
+    user_id = _owner(current_user)
+    stats = service.get_stats(user_id=user_id)
+    return {
+        "user_id": user_id,
+        "total_documents": stats.get("total_documents", 0),
+        "total_chunks": stats.get("total_chunks", 0),
+        "total_memories": stats.get("total_memories", 0),
+        "contributing_sessions": stats.get("contributing_sessions", 0),
+    }
+
+
+@router.get(
+    "/knowledge/search",
+    response_model=dict,
+    responses={
+        401: {"model": ApiError, "description": "Authentication required."},
+    },
+    summary="Semantically search persistent knowledge base",
+)
+@router.get(
     "/memory/search",
     response_model=dict,
     responses={
@@ -47,22 +89,27 @@ def _owner(current_user: dict) -> str:
 async def search_memory(
     q: Optional[str] = Query(None, description="Search query"),
     query: Optional[str] = Query(None, description="Search query alias"),
-    k: int = Query(6, ge=1, le=20, description="Max results"),
+    k: int = Query(10, ge=1, le=50, description="Max results"),
+    source_type: Optional[str] = Query(None, description="Filter by source type: all, document, research"),
     project_id: Optional[str] = Query(None, description="Filter by project"),
     session_id: Optional[str] = Query(None, description="Filter by session"),
+    verification_status: Optional[str] = Query(None, description="Filter by status: verified, unverified, etc."),
     content_type: Optional[str] = Query(None, description="Filter by content type"),
     verified_only: bool = Query(False, description="Only return verified findings"),
     current_user: dict = Depends(get_current_user),
     service: ResearchMemoryService = Depends(get_memory_service),
 ) -> dict:
-    """Return memory records semantically relevant to *q* or *query*, owner-scoped."""
+    """Return knowledge records semantically relevant to *q*, owner-scoped."""
     user_id = _owner(current_user)
     search_text = (q or query or "").strip()
+
     if not search_text:
         records = service.list_memories(
             user_id=user_id,
+            source_type=source_type,
             project_id=project_id,
             session_id=session_id,
+            verification_status=verification_status,
             content_type=content_type,
             limit=k,
         )
@@ -77,10 +124,11 @@ async def search_memory(
         user_id=user_id,
         query=search_text,
         k=k,
+        source_type=source_type,
         project_id=project_id,
         session_id=session_id,
         content_type=content_type,
-        verified_only=verified_only,
+        verified_only=verified_only or (verification_status == "verified"),
     )
     return {
         "query": search_text,
@@ -91,6 +139,14 @@ async def search_memory(
 
 
 @router.get(
+    "/knowledge",
+    response_model=dict,
+    responses={
+        401: {"model": ApiError, "description": "Authentication required."},
+    },
+    summary="List persistent knowledge records",
+)
+@router.get(
     "/memory",
     response_model=dict,
     responses={
@@ -99,19 +155,21 @@ async def search_memory(
     summary="List research memory records",
 )
 async def list_memory(
-    project_id: Optional[str] = Query(None),
-    session_id: Optional[str] = Query(None),
-    verification_status: Optional[str] = Query(None),
-    content_type: Optional[str] = Query(None),
+    source_type: Optional[str] = Query(None, description="Filter by source type: all, document, research"),
+    project_id: Optional[str] = Query(None, description="Filter by project"),
+    session_id: Optional[str] = Query(None, description="Filter by session"),
+    verification_status: Optional[str] = Query(None, description="Filter by status: verified, unverified, etc."),
+    content_type: Optional[str] = Query(None, description="Filter by content type"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     current_user: dict = Depends(get_current_user),
     service: ResearchMemoryService = Depends(get_memory_service),
 ) -> dict:
-    """List owned memory records, newest first."""
+    """List owned knowledge records, newest first."""
     user_id = _owner(current_user)
     records = service.list_memories(
         user_id=user_id,
+        source_type=source_type,
         project_id=project_id,
         session_id=session_id,
         verification_status=verification_status,
@@ -128,6 +186,14 @@ async def list_memory(
     }
 
 
+@router.post(
+    "/knowledge",
+    response_model=dict,
+    responses={
+        401: {"model": ApiError, "description": "Authentication required."},
+    },
+    summary="Create a knowledge record",
+)
 @router.post(
     "/memory",
     response_model=dict,
@@ -173,6 +239,15 @@ async def create_memory(
 
 
 @router.get(
+    "/knowledge/{memory_id}",
+    response_model=dict,
+    responses={
+        401: {"model": ApiError, "description": "Authentication required."},
+        404: {"model": ApiError, "description": "Record not found or not owned."},
+    },
+    summary="Get one knowledge record",
+)
+@router.get(
     "/memory/{memory_id}",
     response_model=dict,
     responses={
@@ -186,14 +261,23 @@ async def get_memory(
     current_user: dict = Depends(get_current_user),
     service: ResearchMemoryService = Depends(get_memory_service),
 ) -> dict:
-    """Return one owned memory record."""
+    """Return one owned memory or knowledge record."""
     user_id = _owner(current_user)
     record = service.get_memory(memory_id=memory_id, user_id=user_id)
     if record is None:
-        raise NotFoundError("Memory not found.")
+        raise NotFoundError("Record not found.")
     return {"record": record.__dict__}
 
 
+@router.put(
+    "/knowledge/{memory_id}",
+    response_model=dict,
+    responses={
+        401: {"model": ApiError, "description": "Authentication required."},
+        404: {"model": ApiError, "description": "Record not found or not owned."},
+    },
+    summary="Update a knowledge record",
+)
 @router.put(
     "/memory/{memory_id}",
     response_model=dict,
@@ -221,10 +305,19 @@ async def update_memory(
         confidence=confidence,
     )
     if record is None:
-        raise NotFoundError("Memory not found or update not permitted.")
+        raise NotFoundError("Record not found or update not permitted.")
     return {"record": record.__dict__}
 
 
+@router.delete(
+    "/knowledge/{memory_id}",
+    response_model=dict,
+    responses={
+        401: {"model": ApiError, "description": "Authentication required."},
+        404: {"model": ApiError, "description": "Record not found or not owned."},
+    },
+    summary="Delete a knowledge record",
+)
 @router.delete(
     "/memory/{memory_id}",
     response_model=dict,
@@ -239,11 +332,11 @@ async def delete_memory(
     current_user: dict = Depends(get_current_user),
     service: ResearchMemoryService = Depends(get_memory_service),
 ) -> dict:
-    """Soft-delete an owned memory record."""
+    """Delete an owned memory or knowledge record."""
     user_id = _owner(current_user)
     ok = service.delete_memory(memory_id=memory_id, user_id=user_id)
     if not ok:
-        raise NotFoundError("Memory not found or not owned.")
+        raise NotFoundError("Record not found or not owned.")
     return {"deleted": True, "memory_id": memory_id}
 
 

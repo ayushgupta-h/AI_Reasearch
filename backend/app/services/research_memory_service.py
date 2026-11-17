@@ -220,6 +220,44 @@ class ResearchMemoryService:
                 logger.warning("memory.chroma_delete_failed", extra={"error": str(exc)})
         return True
 
+    def get_stats(self, *, user_id: str) -> Dict[str, int]:
+        """Aggregate persistent knowledge metrics across documents and research sessions."""
+        store = ResearchMemoryStore(
+            settings=self._settings,
+            user_id=user_id,
+        )
+        return store.get_stats()
+
+    def add_document_chunks(
+        self,
+        *,
+        user_id: str,
+        document_id: str,
+        filename: str,
+        chunks: List[str],
+        project_id: Optional[str] = None,
+    ) -> int:
+        """Vectorize, encrypt, and index document chunks into persistent knowledge base."""
+        store = ResearchMemoryStore(
+            settings=self._settings,
+            user_id=user_id,
+            project_id=project_id,
+        )
+        return store.add_document_chunks(
+            document_id=document_id,
+            filename=filename,
+            chunks=chunks,
+            project_id=project_id,
+        )
+
+    def delete_document_chunks(self, *, user_id: str, document_id: str) -> int:
+        """Purge indexed vector chunks for a deleted document."""
+        store = ResearchMemoryStore(
+            settings=self._settings,
+            user_id=user_id,
+        )
+        return store.delete_document_chunks(document_id=document_id)
+
     # ── Read ───────────────────────────────────────────────────────────
 
     def get_memory(self, *, memory_id: str, user_id: str) -> Optional[MemoryRecord]:
@@ -231,6 +269,7 @@ class ResearchMemoryService:
         self,
         *,
         user_id: str,
+        source_type: Optional[str] = None,
         project_id: Optional[str] = None,
         session_id: Optional[str] = None,
         verification_status: Optional[str] = None,
@@ -238,8 +277,8 @@ class ResearchMemoryService:
         limit: int = 100,
         offset: int = 0,
     ) -> List[MemoryRecord]:
-        """List owned memories, newest first."""
-        if self._repo.available:
+        """List owned memories, newest first. Checks unified ChromaDB store when appropriate."""
+        if self._repo.available and not source_type:
             records = self._repo.list_memories(
                 user_id=user_id,
                 project_id=project_id,
@@ -251,7 +290,7 @@ class ResearchMemoryService:
             )
             return [self._to_record(r) for r in records]
 
-        # ChromaDB vector store fallback when PostgreSQL is not configured
+        # ChromaDB vector store for unified knowledge (documents + research)
         try:
             store = ResearchMemoryStore(
                 settings=self._settings,
@@ -260,9 +299,10 @@ class ResearchMemoryService:
                 session_id=session_id,
             )
             chroma_records = store.list_memories(
-                user_id=user_id,
+                source_type=source_type,
                 project_id=project_id,
                 session_id=session_id,
+                verification_status=verification_status,
                 content_type=content_type,
                 limit=limit,
             )
@@ -275,7 +315,7 @@ class ResearchMemoryService:
                         user_id=meta.get("user_id", user_id),
                         project_id=meta.get("project_id"),
                         session_id=meta.get("session_id"),
-                        source_id=meta.get("source_id"),
+                        source_id=meta.get("source_id") or meta.get("document_id") or meta.get("filename"),
                         content_type=meta.get("content_type", "finding"),
                         content_text=item.get("content", ""),
                         verification_status=meta.get("verification_status", "unverified"),
@@ -299,20 +339,18 @@ class ResearchMemoryService:
         user_id: str,
         query: str,
         k: int = 6,
+        source_type: Optional[str] = None,
         project_id: Optional[str] = None,
         session_id: Optional[str] = None,
         content_type: Optional[str] = None,
         verified_only: bool = False,
     ) -> List[MemoryRecord]:
         """
-        Semantically search previous research findings relevant to *query*.
+        Semantically search previous research findings and indexed documents relevant to *query*.
 
         Results are strictly scoped to *user_id* (and *project_id* /
         *session_id* when provided). ``verified_only`` excludes
         unverified/contradicted findings.
-
-        Memory supplements fresh research — it never replaces it. Callers
-        should still run live searches when current information is required.
         """
         store = ResearchMemoryStore(
             settings=self._settings,
@@ -323,6 +361,7 @@ class ResearchMemoryService:
         results = store.search_memories(
             query=query,
             k=k,
+            source_type=source_type,
             content_type=content_type,
             verification_status="verified" if verified_only else None,
             project_id=project_id,

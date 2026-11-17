@@ -359,32 +359,36 @@ class DocumentService:
             )
             return self.get_document(document_id, owner_id)
 
-        # Chunk and index into ChromaDB
+        # Chunk and index into persistent encrypted ChromaDB vector store
         try:
+            import re
             import sys
             from pathlib import Path as P
             root_dir = str(P(__file__).resolve().parent.parent.parent)
             if root_dir not in sys.path:
                 sys.path.insert(0, root_dir)
-            from knowledge_base import _chunk_text, ResearchKnowledgeBase
-            chunks = _chunk_text(text)
-            if not chunks:
-                chunks = [text[:2000]]
+            from knowledge_base import _chunk_text
+            from app.services.research_memory_store import ResearchMemoryStore
 
-            kb = ResearchKnowledgeBase(user_id=owner_id, project_id=row.get("project_id"))
-            kb.index_texts(
-                texts=chunks,
-                source_label=filename,
-                meta_base={
-                    "document_id": document_id,
-                    "filename": filename,
-                    "source_type": "document",
-                    "user_id": owner_id,
-                    "project_id": row.get("project_id") or "",
-                }
+            # Clean and normalize text
+            cleaned_text = re.sub(r"\r\n|\r", "\n", text)
+            cleaned_text = re.sub(r"\n{3,}", "\n\n", cleaned_text).strip()
+            chunks = _chunk_text(cleaned_text, chunk_size=1000, overlap=200)
+            if not chunks:
+                chunks = [cleaned_text[:2000]]
+
+            store = ResearchMemoryStore(
+                user_id=owner_id,
+                project_id=row.get("project_id"),
+            )
+            indexed_count = store.add_document_chunks(
+                document_id=document_id,
+                filename=filename,
+                chunks=chunks,
+                project_id=row.get("project_id"),
             )
             self._repository.update_status(document_id, owner_id, status="indexed")
-            self._repository.update_chunk_count(document_id, owner_id, len(chunks))
+            self._repository.update_chunk_count(document_id, owner_id, indexed_count)
         except Exception as exc:
             logger.warning(f"ChromaDB indexing warning: {exc}")
             self._repository.update_status(document_id, owner_id, status="indexed")
@@ -413,16 +417,11 @@ class DocumentService:
             raise FileProcessingError("Could not delete the stored document.") from exc
 
         try:
-            import sys
-            from pathlib import Path as P
-            root_dir = str(P(__file__).resolve().parent.parent.parent)
-            if root_dir not in sys.path:
-                sys.path.insert(0, root_dir)
-            from knowledge_base import ResearchKnowledgeBase
-            kb = ResearchKnowledgeBase(user_id=owner, project_id=row.get("project_id"))
-            kb.collection.delete(where={"document_id": document_id})
-        except Exception:
-            pass
+            from app.services.research_memory_store import ResearchMemoryStore
+            store = ResearchMemoryStore(user_id=owner, project_id=row.get("project_id"))
+            store.delete_document_chunks(document_id=document_id)
+        except Exception as exc:
+            logger.warning(f"ChromaDB chunk cleanup warning: {exc}")
 
         self._repository.delete(document_id, owner)
         logger.info("document.deleted", extra={"document_id": document_id})

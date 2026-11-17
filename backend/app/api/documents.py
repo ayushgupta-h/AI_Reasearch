@@ -150,6 +150,12 @@ async def get_document(
 
 
 @router.get(
+    "/documents/{document_id}/index-status",
+    response_model=DocumentStatusResponse,
+    responses=_ERRORS,
+    summary="Get document indexing status alias",
+)
+@router.get(
     "/documents/{document_id}/status",
     response_model=DocumentStatusResponse,
     responses=_ERRORS,
@@ -186,6 +192,12 @@ async def download_document(
     )
 
 
+@router.post(
+    "/documents/{document_id}/reindex",
+    response_model=DocumentRecord,
+    responses=_ERRORS,
+    summary="Reindex an uploaded document alias",
+)
 @router.post(
     "/documents/{document_id}/process",
     response_model=DocumentRecord,

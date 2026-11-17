@@ -30,7 +30,7 @@ import { api, apiError, downloadExport, getAccessToken, streamUrl } from '../api
 import { API, API_BASE } from '../api/endpoints';
 import type {
   ClaimRecord, Project, ResearchReport, ResearchSession, SourceRef,
-  DocumentRecord, ContradictionRecord, MemoryRecord, HealthStatus,
+  DocumentRecord, ContradictionRecord, MemoryRecord, KnowledgeStats, HealthStatus,
   ProvidersResponse, UsageSummaryResponse, NotificationRecord
 } from '../api/types';
 import { streamSSE, type SSEMessage } from '../lib/sse';
@@ -2723,68 +2723,188 @@ export function ReviewCenterPage() {
 
 export function KnowledgeBasePage() {
   const [q, setQ] = useState('');
+  const [sourceType, setSourceType] = useState<'all' | 'document' | 'research'>('all');
+  const [selectedProject, setSelectedProject] = useState<string>('all');
+  const [verificationFilter, setVerificationFilter] = useState<'all' | 'verified'>('all');
   const [results, setResults] = useState<MemoryRecord[]>([]);
   const [busy, setBusy] = useState(false);
+  const [stats, setStats] = useState<KnowledgeStats>({
+    total_documents: 0,
+    total_chunks: 0,
+    total_memories: 0,
+    contributing_sessions: 0,
+  });
   const [initialLoaded, setInitialLoaded] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { data: projects = [] } = useProjects();
   const navigate = useNavigate();
 
-  const fetchMemories = useCallback(async (searchQuery = '') => {
-    setBusy(true);
+  const loadStats = useCallback(async () => {
     try {
-      const url = searchQuery.trim()
-        ? `${API.memory.search}?q=${encodeURIComponent(searchQuery.trim())}`
-        : API.memory.search;
-      const { data } = await api.get<{ results?: MemoryRecord[]; memories?: MemoryRecord[] }>(url);
-      setResults(data?.results || data?.memories || asList<MemoryRecord>(data));
-    } catch (_) {
-      setResults([]);
-    } finally {
-      setBusy(false);
-      setInitialLoaded(true);
-    }
+      const { data } = await api.get<KnowledgeStats>(API.knowledge.stats);
+      if (data) {
+        setStats({
+          total_documents: data.total_documents || 0,
+          total_chunks: data.total_chunks || 0,
+          total_memories: data.total_memories || 0,
+          contributing_sessions: data.contributing_sessions || 0,
+        });
+      }
+    } catch (_) {}
   }, []);
 
+  const fetchKnowledge = useCallback(
+    async (
+      searchQuery = '',
+      srcType = sourceType,
+      proj = selectedProject,
+      ver = verificationFilter
+    ) => {
+      setBusy(true);
+      try {
+        const params = new URLSearchParams();
+        if (searchQuery.trim()) params.set('q', searchQuery.trim());
+        if (srcType !== 'all') params.set('source_type', srcType);
+        if (proj !== 'all') params.set('project_id', proj);
+        if (ver === 'verified') params.set('verification_status', 'verified');
+        params.set('k', '40');
+
+        const url = `${API.knowledge.search}?${params.toString()}`;
+        const { data } = await api.get<{ results?: MemoryRecord[]; memories?: MemoryRecord[] }>(url);
+        setResults(data?.results || data?.memories || asList<MemoryRecord>(data));
+      } catch (_) {
+        setResults([]);
+      } finally {
+        setBusy(false);
+        setInitialLoaded(true);
+      }
+    },
+    [sourceType, selectedProject, verificationFilter]
+  );
+
   useEffect(() => {
-    fetchMemories();
-  }, [fetchMemories]);
+    loadStats();
+    fetchKnowledge(q, sourceType, selectedProject, verificationFilter);
+  }, [loadStats, fetchKnowledge, sourceType, selectedProject, verificationFilter]);
 
   const onSearch = (e: FormEvent) => {
     e.preventDefault();
-    fetchMemories(q);
+    fetchKnowledge(q, sourceType, selectedProject, verificationFilter);
+  };
+
+  const onDeleteRecord = async (recordId: string) => {
+    if (!window.confirm('Are you sure you want to remove this record from persistent memory?')) return;
+    try {
+      await api.delete(API.knowledge.delete(recordId));
+      setResults((prev) => prev.filter((r) => r.id !== recordId && r.memory_id !== recordId));
+      loadStats();
+    } catch (err) {
+      alert('Could not delete record: ' + apiError(err));
+    }
   };
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8">
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+    <div className="mx-auto max-w-6xl px-4 py-8">
+      {/* Header */}
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Research Memory & Knowledge Base</h1>
-          <p className="text-xs text-[#817463]">Persistent cross-investigation memory vector store backed by ChromaDB and AES-256 isolation.</p>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[#C5A36A]/40 bg-[#C5A36A]/10 px-2.5 py-0.5 text-[11px] font-medium text-[#E9D6B6]">
+              <Brain className="h-3.5 w-3.5 text-[#C5A36A]" /> Persistent Vector RAG
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-400">
+              <ShieldCheck className="h-3 w-3" /> AES-256-GCM
+            </span>
+          </div>
+          <h1 className="font-serif text-3xl font-semibold text-[#E9D6B6]">
+            Research Memory & Knowledge Base
+          </h1>
+          <p className="text-xs text-[#A89885] mt-1 max-w-2xl leading-relaxed">
+            Persistent cross-investigation intelligence system. Unified retrieval combining uploaded
+            reference literature and verified research findings across all sessions and projects.
+          </p>
         </div>
-        {results.length > 0 && (
-          <span className="font-mono text-xs text-[#C5A36A]">
-            {results.length} Indexed Finding{results.length === 1 ? '' : 's'}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              loadStats();
+              fetchKnowledge(q, sourceType, selectedProject, verificationFilter);
+            }}
+            loading={busy}
+          >
+            <RefreshCw className="h-3.5 w-3.5 mr-1" /> Refresh
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => navigate('/app/documents')}
+          >
+            <UploadCloud className="h-3.5 w-3.5 mr-1" /> Add Documents
+          </Button>
+        </div>
       </div>
 
-      <form onSubmit={onSearch} className="flex gap-2 mb-8">
+      {/* Real-time Overview Statistics Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div className="rounded-xl border border-[#453322] bg-[#12100E] p-4 shadow-sm hover:border-[#C5A36A]/40 transition-colors">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-[#A89885]">Indexed Documents</span>
+            <FileText className="h-4 w-4 text-[#C5A36A]" />
+          </div>
+          <div className="font-serif text-2xl font-bold text-[#E9D6B6]">{stats.total_documents}</div>
+          <p className="text-[11px] text-[#786958] mt-0.5">PDF, DOCX, TXT literature</p>
+        </div>
+
+        <div className="rounded-xl border border-[#453322] bg-[#12100E] p-4 shadow-sm hover:border-[#C5A36A]/40 transition-colors">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-[#A89885]">Vectorized Chunks</span>
+            <Files className="h-4 w-4 text-[#C5A36A]" />
+          </div>
+          <div className="font-serif text-2xl font-bold text-[#E9D6B6]">{stats.total_chunks}</div>
+          <p className="text-[11px] text-[#786958] mt-0.5">ChromaDB encrypted blocks</p>
+        </div>
+
+        <div className="rounded-xl border border-[#453322] bg-[#12100E] p-4 shadow-sm hover:border-[#C5A36A]/40 transition-colors">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-[#A89885]">Research Memories</span>
+            <Brain className="h-4 w-4 text-[#C5A36A]" />
+          </div>
+          <div className="font-serif text-2xl font-bold text-[#E9D6B6]">{stats.total_memories}</div>
+          <p className="text-[11px] text-[#786958] mt-0.5">Summaries, claims & evidence</p>
+        </div>
+
+        <div className="rounded-xl border border-[#453322] bg-[#12100E] p-4 shadow-sm hover:border-[#C5A36A]/40 transition-colors">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-[#A89885]">Contributing Sessions</span>
+            <History className="h-4 w-4 text-[#C5A36A]" />
+          </div>
+          <div className="font-serif text-2xl font-bold text-[#E9D6B6]">{stats.contributing_sessions}</div>
+          <p className="text-[11px] text-[#786958] mt-0.5">Past research runs</p>
+        </div>
+      </div>
+
+      {/* Semantic Search Bar */}
+      <form onSubmit={onSearch} className="flex gap-2 mb-4">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#817463]" />
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Semantic search across all past research findings, claims, and entities…"
-            className="pl-9"
+            placeholder="Natural-language semantic search across documents, verified claims, and prior investigations…"
+            className="pl-9 bg-[#10100E] border-[#453322] text-[#E9D6B6] placeholder-[#6E6050]"
           />
         </div>
         <Button variant="primary" type="submit" loading={busy}>
-          <Search className="h-4 w-4" /> Search
+          <Search className="h-4 w-4 mr-1" /> Search
         </Button>
         {q && (
           <Button
+            variant="outline"
             onClick={() => {
               setQ('');
-              fetchMemories('');
+              fetchKnowledge('', sourceType, selectedProject, verificationFilter);
             }}
           >
             Clear
@@ -2792,37 +2912,255 @@ export function KnowledgeBasePage() {
         )}
       </form>
 
+      {/* Multi-Dimensional Filter Controls */}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#302319] bg-[#0E0D0B] p-3">
+        {/* Source Type Filter Tabs */}
+        <div className="flex items-center gap-1 bg-[#181614] p-1 rounded-lg border border-[#3A2A1E]">
+          <button
+            type="button"
+            onClick={() => setSourceType('all')}
+            className={`px-3 py-1 text-xs rounded-md font-medium transition-colors ${
+              sourceType === 'all'
+                ? 'bg-[#C5A36A] text-[#12100E] shadow-sm font-semibold'
+                : 'text-[#A89885] hover:text-[#E9D6B6]'
+            }`}
+          >
+            All Knowledge
+          </button>
+          <button
+            type="button"
+            onClick={() => setSourceType('document')}
+            className={`flex items-center gap-1.5 px-3 py-1 text-xs rounded-md font-medium transition-colors ${
+              sourceType === 'document'
+                ? 'bg-[#C5A36A] text-[#12100E] shadow-sm font-semibold'
+                : 'text-[#A89885] hover:text-[#E9D6B6]'
+            }`}
+          >
+            <FileText className="h-3 w-3" /> Uploaded Documents
+          </button>
+          <button
+            type="button"
+            onClick={() => setSourceType('research')}
+            className={`flex items-center gap-1.5 px-3 py-1 text-xs rounded-md font-medium transition-colors ${
+              sourceType === 'research'
+                ? 'bg-[#C5A36A] text-[#12100E] shadow-sm font-semibold'
+                : 'text-[#A89885] hover:text-[#E9D6B6]'
+            }`}
+          >
+            <Brain className="h-3 w-3" /> Research Findings
+          </button>
+        </div>
+
+        {/* Project & Verification Dropdowns */}
+        <div className="flex items-center gap-2">
+          {/* Project selector */}
+          <div className="flex items-center gap-1.5 text-xs text-[#A89885]">
+            <FolderKanban className="h-3.5 w-3.5 text-[#C5A36A]" />
+            <select
+              value={selectedProject}
+              onChange={(e) => setSelectedProject(e.target.value)}
+              className="rounded-lg border border-[#453322] bg-[#141210] px-2.5 py-1 text-xs text-[#E9D6B6] focus:border-[#C5A36A] focus:outline-none"
+            >
+              <option value="all">All Projects</option>
+              {projects.map((p) => (
+                <option key={p.project_id || p.id} value={p.project_id || p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Verification Status selector */}
+          <div className="flex items-center gap-1.5 text-xs text-[#A89885]">
+            <Filter className="h-3.5 w-3.5 text-[#C5A36A]" />
+            <select
+              value={verificationFilter}
+              onChange={(e) => setVerificationFilter(e.target.value as 'all' | 'verified')}
+              className="rounded-lg border border-[#453322] bg-[#141210] px-2.5 py-1 text-xs text-[#E9D6B6] focus:border-[#C5A36A] focus:outline-none"
+            >
+              <option value="all">All Statuses</option>
+              <option value="verified">Verified Only</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Results Header */}
+      <div className="mb-3 flex items-center justify-between text-xs text-[#817463]">
+        <span>
+          Showing <strong className="text-[#E9D6B6]">{results.length}</strong> knowledge record
+          {results.length === 1 ? '' : 's'}
+        </span>
+        {results.length > 0 && (
+          <span className="font-mono text-[11px] text-[#C5A36A]">
+            ChromaDB Semantic Index · AES-256 Authenticated
+          </span>
+        )}
+      </div>
+
+      {/* Knowledge Cards List */}
       {busy && !initialLoaded ? (
-        <div className="space-y-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-24" />)}</div>
+        <div className="space-y-3">
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-28 rounded-xl" />
+          ))}
+        </div>
       ) : results.length > 0 ? (
         <div className="space-y-3">
           {results.map((r, i) => {
-            const memoryText = r.summary || r.content || (typeof r === 'string' ? r : JSON.stringify(r));
-            const sessionId = (r as any).session_id || (r as any).research_id;
+            const recordId = (r.id || r.memory_id || `rec-${i}`).toString();
+            const memoryText =
+              r.content || r.content_text || r.summary || (typeof r === 'string' ? r : JSON.stringify(r));
+            const meta = (r as any).metadata || {};
+            const isDoc =
+              r.source_type === 'document' ||
+              meta.source_type === 'document' ||
+              r.content_type === 'document_chunk' ||
+              meta.content_type === 'document_chunk' ||
+              Boolean(r.document_id || meta.document_id);
+
+            const cType = r.content_type || meta.content_type || (isDoc ? 'document_chunk' : 'claim');
+            const vStatus = r.verification_status || meta.verification_status || 'verified';
+            const sessionId = r.session_id || meta.session_id;
+            const docId = r.document_id || meta.document_id;
+            const filename = r.filename || meta.filename || meta.title || r.topic;
+            const isExpanded = expandedId === recordId;
 
             return (
-              <div key={r.memory_id || r.id || i} className="rounded-xl border border-[#453322] bg-[#10100E] p-4 shadow-sm hover:border-[#C5A36A]/40 transition-colors">
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <h4 className="font-serif font-semibold text-[#E9D6B6] text-sm">
-                    {r.topic || r.query || 'Research Finding'}
-                  </h4>
-                  {sessionId && (
-                    <button
-                      onClick={() => navigate(`/app/research/${sessionId}`)}
-                      className="inline-flex items-center gap-1 text-[11px] text-[#C5A36A] hover:underline"
+              <div
+                key={recordId}
+                className="group rounded-xl border border-[#453322] bg-[#12100E] p-4 shadow-sm hover:border-[#C5A36A]/50 transition-all"
+              >
+                {/* Header row */}
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+                  <div className="flex items-center gap-2">
+                    {/* Source & Content Type Badges */}
+                    {isDoc ? (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-cyan-800/40 bg-cyan-950/40 px-2 py-0.5 text-[10px] font-medium text-cyan-300">
+                        <FileText className="h-3 w-3" /> Document Chunk
+                      </span>
+                    ) : cType === 'summary' ? (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-purple-800/40 bg-purple-950/40 px-2 py-0.5 text-[10px] font-medium text-purple-300">
+                        <Sparkles className="h-3 w-3" /> Executive Summary
+                      </span>
+                    ) : cType === 'evidence' ? (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-amber-800/40 bg-amber-950/40 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                        <ShieldCheck className="h-3 w-3" /> Evidence Passage
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-[#C5A36A]/40 bg-[#C5A36A]/10 px-2 py-0.5 text-[10px] font-medium text-[#E9D6B6]">
+                        <Brain className="h-3 w-3 text-[#C5A36A]" /> Research Finding
+                      </span>
+                    )}
+
+                    {/* Verification Status Badge */}
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.2 text-[10px] font-medium ${
+                        vStatus === 'verified'
+                          ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                          : vStatus === 'partially_verified'
+                          ? 'border border-amber-500/30 bg-amber-500/10 text-amber-400'
+                          : 'border border-[#554332] bg-[#221B14] text-[#A89885]'
+                      }`}
                     >
-                      View Investigation <ArrowUpRight className="h-3 w-3" />
+                      <CheckCircle2 className="h-2.5 w-2.5" />
+                      {vStatus.replace('_', ' ')}
+                    </span>
+
+                    {/* Confidence score pill if present */}
+                    {r.confidence != null && (
+                      <span className="text-[10px] font-mono text-[#A89885] bg-[#181614] px-1.5 py-0.5 rounded border border-[#302319]">
+                        {Math.round(Number(r.confidence) * 100)}% conf
+                      </span>
+                    )}
+
+                    {/* Source label / Document Name */}
+                    {filename && (
+                      <span className="text-xs font-serif font-medium text-[#E9D6B6] truncate max-w-xs">
+                        {filename}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2">
+                    {sessionId && (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/app/research/${sessionId}`)}
+                        className="inline-flex items-center gap-1 text-[11px] text-[#C5A36A] hover:underline hover:text-[#E9D6B6]"
+                      >
+                        View Session <ArrowUpRight className="h-3 w-3" />
+                      </button>
+                    )}
+                    {docId && (
+                      <button
+                        type="button"
+                        onClick={() => navigate('/app/documents')}
+                        className="inline-flex items-center gap-1 text-[11px] text-cyan-400 hover:underline"
+                      >
+                        View Documents <ArrowUpRight className="h-3 w-3" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onDeleteRecord(recordId)}
+                      title="Delete from knowledge base"
+                      className="p-1 text-[#655543] hover:text-red-400 opacity-60 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
+                  </div>
+                </div>
+
+                {/* Content Passage */}
+                <div className="text-xs text-[#D8CAB5] leading-relaxed mb-3">
+                  {memoryText.length > 280 && !isExpanded ? (
+                    <>
+                      <p>{memoryText.slice(0, 280)}…</p>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedId(recordId)}
+                        className="mt-1 text-[11px] font-medium text-[#C5A36A] hover:underline"
+                      >
+                        Show full passage
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p>{memoryText}</p>
+                      {memoryText.length > 280 && (
+                        <button
+                          type="button"
+                          onClick={() => setExpandedId(null)}
+                          className="mt-1 text-[11px] font-medium text-[#C5A36A] hover:underline"
+                        >
+                          Show less
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
-                <p className="text-xs text-[#C0B19C] leading-relaxed mb-3">{memoryText}</p>
-                <div className="flex items-center gap-2 text-[11px] text-[#817463] font-mono border-t border-[#302319] pt-2">
-                  <span>ChromaDB Vector Store</span>
-                  {r.created_at && (
-                    <>
-                      <span>·</span>
-                      <span>{fmtDate(r.created_at)}</span>
-                    </>
+
+                {/* Footer metadata */}
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#302319] pt-2 text-[11px] text-[#786958] font-mono">
+                  <div className="flex items-center gap-2">
+                    <span>ChromaDB Vector Store</span>
+                    {(meta.project_id || r.project_id) && (
+                      <>
+                        <span>·</span>
+                        <span className="text-[#A89885]">Project: {meta.project_id || r.project_id}</span>
+                      </>
+                    )}
+                    {meta.chunk_index != null && (
+                      <>
+                        <span>·</span>
+                        <span>Chunk #{meta.chunk_index}</span>
+                      </>
+                    )}
+                  </div>
+                  {(r.created_at || meta.created_at) && (
+                    <span>{fmtDate(r.created_at || meta.created_at)}</span>
                   )}
                 </div>
               </div>
@@ -2831,9 +3169,13 @@ export function KnowledgeBasePage() {
         </div>
       ) : (
         <EmptyState
-          icon={<Brain className="h-6 w-6" />}
+          icon={<Brain className="h-8 w-8 text-[#C5A36A]" />}
           title={q ? 'No matching memory findings' : 'Knowledge Base Ready'}
-          hint={q ? 'Try searching for alternative topics or entities.' : 'As research investigations finish, verified claims and key findings are automatically ingested here.'}
+          hint={
+            q
+              ? 'Try adjusting your search terms or selecting "All Knowledge" to expand your query scope.'
+              : 'Upload reference papers and reports in the Documents workspace, or complete an investigation to automatically populate persistent memory.'
+          }
         />
       )}
     </div>

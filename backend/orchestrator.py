@@ -839,14 +839,34 @@ class MultiAgentOrchestrator:
         # RAG context retrieved by rag_node (may be empty string if KB had no docs)
         rag_context = state.get("rag_context", "")
 
-        # Compose enriched evidence: RAG first, then direct snippets as fallback
+        # Format persistent prior knowledge (documents & prior research)
+        retrieved_memories = state.get("retrieved_memories", [])
+        prior_knowledge_block = ""
+        if retrieved_memories:
+            lines = []
+            for m in retrieved_memories[:6]:
+                src = m.get("content_type", "prior_knowledge")
+                status = m.get("verification_status", "verified")
+                txt = m.get("content", "").strip()
+                if txt:
+                    lines.append(f"• [{src.upper()} - {status.upper()}]: {txt}")
+            if lines:
+                prior_knowledge_block = (
+                    "PRIOR KNOWLEDGE & REFERENCE ARCHIVE (Persistent Memory):\n"
+                    + "\n".join(lines)
+                    + "\n\n"
+                )
+
+        # Compose enriched evidence: prior knowledge + RAG + live search snippets
         if rag_context:
             evidence = (
+                f"{prior_knowledge_block}"
                 f"SEMANTIC KNOWLEDGE BASE CONTEXT (RAG):\n{rag_context[:3500]}\n\n"
                 f"SUPPLEMENTARY DIRECT SNIPPETS:\n{state.get('search_results', '')[:1500]}"
             )
         else:
             evidence = (
+                f"{prior_knowledge_block}"
                 f"PRIMARY SEARCH SNIPPETS:\n{state.get('search_results', '')[:4000]}\n\n"
                 f"SCRAPED CONTENT:\n{state.get('scraped_content', '')[:4000]}"
             )

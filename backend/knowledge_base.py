@@ -176,16 +176,16 @@ class ResearchKnowledgeBase:
 
     def __init__(
         self,
-        topic: str,
+        topic: str = "general",
         persist_dir: str = _DEFAULT_PERSIST_DIR,
         embeddings: Optional[Any] = None,
         user_id: str = "",
         project_id: str = "",
     ) -> None:
-        self.topic = topic
+        self.topic = topic or "general"
         self.persist_dir = persist_dir
         self.embeddings = embeddings or _get_embeddings()
-        self._collection_name = self._make_collection_name(topic)
+        self._collection_name = self._make_collection_name(self.topic)
         self._vectorstore = None          # lazy-initialised
         self._indexed_count: int = 0
         # Multi-tenant isolation (Task 2.4): owner identifiers are stamped on
@@ -368,6 +368,19 @@ class ResearchKnowledgeBase:
 
         self._indexed_count += len(all_chunks)
         return len(all_chunks)
+
+    def index_texts(
+        self,
+        texts: List[str],
+        source_label: str = "text",
+        meta_base: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Helper to index pre-chunked strings with a base metadata dictionary."""
+        if not texts:
+            return 0
+        base = meta_base or {}
+        metas = [dict(base) for _ in texts]
+        return self.index(texts, metas=metas, source_label=source_label)
 
     def index_search_results(self, search_results_raw: List[Dict[str, Any]]) -> int:
         """

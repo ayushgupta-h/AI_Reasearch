@@ -242,24 +242,62 @@ class ResearchService:
             )
             self._register_report(final_state, user_id, research_id, request.topic)
 
-            # Ingest key claims into persistent memory for cross-investigation retrieval
+            # Ingest research findings into persistent knowledge base for cross-investigation retrieval
             if user_id:
                 try:
                     from app.services.research_memory_service import ResearchMemoryService
                     mem_svc = ResearchMemoryService()
+                    proj_id = getattr(request, "project_id", None)
+
+                    # 1. Executive Summary / Synthesis Overview
+                    summary = final_state.get("executive_summary") or final_state.get("summary")
+                    if summary and len(summary.strip()) > 40:
+                        mem_svc.store_memory(
+                            user_id=user_id,
+                            content=summary.strip(),
+                            content_type="summary",
+                            verification_status="verified",
+                            project_id=proj_id,
+                            session_id=research_id,
+                            source_id=f"session:{research_id}",
+                        )
+
+                    # 2. Key Verified / Evaluated Claims
                     claims = final_state.get("claims") or final_state.get("claim_verification_results") or []
-                    for c in claims[:8]:
+                    for c in claims[:10]:
                         txt = (c.get("text") or c.get("claim_text") or c.get("conclusion") or "") if isinstance(c, dict) else str(c)
                         if txt and len(txt) > 20:
                             v_status = c.get("status") or c.get("verification_status") or "verified" if isinstance(c, dict) else "verified"
+                            conf = c.get("confidence") if isinstance(c, dict) else None
                             mem_svc.store_memory(
                                 user_id=user_id,
                                 content=txt,
                                 content_type="claim",
                                 verification_status=str(v_status),
-                                project_id=getattr(request, "project_id", None),
+                                confidence=float(conf) if conf is not None else None,
+                                project_id=proj_id,
                                 session_id=research_id,
+                                source_id=f"session:{research_id}",
                             )
+
+                    # 3. High-credibility Evidence Snippets
+                    evidence_map = final_state.get("evidence_map") or {}
+                    if isinstance(evidence_map, dict):
+                        for claim_id, items in list(evidence_map.items())[:6]:
+                            if isinstance(items, list):
+                                for ev in items[:2]:
+                                    if isinstance(ev, dict) and ev.get("snippet"):
+                                        snip = ev["snippet"].strip()
+                                        if len(snip) > 30:
+                                            mem_svc.store_memory(
+                                                user_id=user_id,
+                                                content=snip,
+                                                content_type="evidence",
+                                                verification_status="verified",
+                                                source_id=ev.get("url") or ev.get("source_id") or f"session:{research_id}",
+                                                project_id=proj_id,
+                                                session_id=research_id,
+                                            )
                 except Exception as exc:
                     logger.warning(f"Research memory ingestion deferred: {exc}")
 
