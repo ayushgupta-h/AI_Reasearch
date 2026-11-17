@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Path, Query, Response, UploadFile
+from pydantic import BaseModel, Field
 
 from app.errors import AuthenticationError
 from app.schemas.common import PaginationMeta
@@ -19,8 +20,18 @@ from app.schemas.documents import (
 from app.schemas.enums import DocumentProcessingStatus
 from app.schemas.errors import ApiError
 from app.security.dependencies import get_current_user
-from app.services.container import get_document_service
+from app.services.container import get_document_service, get_document_chat_service
 from app.services.document_service import DocumentService
+from app.services.document_chat_service import DocumentChatService
+
+class DocumentChatRequest(BaseModel):
+    question: str = Field(..., min_length=1, description="User question about the document.")
+    conversation_id: Optional[str] = Field(None, description="Optional ongoing conversation ID.")
+
+class MultiDocumentChatRequest(BaseModel):
+    question: str = Field(..., min_length=1, description="Question across multiple documents.")
+    document_ids: List[str] = Field(..., min_length=1, description="List of document IDs to analyze.")
+    conversation_id: Optional[str] = Field(None, description="Optional ongoing conversation ID.")
 
 router = APIRouter(tags=["Documents"])
 
@@ -56,6 +67,13 @@ def _pagination(limit: int, offset: int, total: int, returned: int) -> Paginatio
 
 
 @router.post(
+    "/documents",
+    response_model=DocumentRecord,
+    status_code=201,
+    responses=_ERRORS,
+    summary="Upload a research document (alias)",
+)
+@router.post(
     "/documents/upload",
     response_model=DocumentRecord,
     status_code=201,
@@ -64,25 +82,31 @@ def _pagination(limit: int, offset: int, total: int, returned: int) -> Paginatio
 )
 async def upload_document(
     file: UploadFile = File(..., description="PDF, DOCX, TXT or Markdown file."),
-    project_id: Optional[UUID] = Form(None, description="Optional owning project."),
-    research_id: Optional[str] = Form(
-        None,
-        pattern=r"^[a-f0-9]{32}$",
-        description="Optional research session id.",
-    ),
+    project_id: Optional[str] = Form(None, description="Optional owning project."),
+    research_id: Optional[str] = Form(None, description="Optional research session id."),
     current_user: dict = Depends(get_current_user),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentRecord:
-    """Validate and store one document. The recorded status is ``uploaded``.
+    """Validate, store, and index one research document."""
+    clean_project_id: Optional[UUID] = None
+    if project_id is not None:
+        val = project_id.strip()
+        if val and val.lower() not in {"null", "undefined", "none"}:
+            try:
+                clean_project_id = UUID(val)
+            except (ValueError, TypeError):
+                from fastapi import HTTPException
+                raise HTTPException(status_code=422, detail="Invalid project_id")
 
-    Indexing is not attempted here, so a successful upload never claims to be
-    ``indexed``.
-    """
+    clean_research_id: Optional[str] = None
+    if research_id and research_id.strip() and research_id.strip().lower() not in {"null", "undefined", "none", ""}:
+        clean_research_id = research_id.strip()
+
     row = await service.upload(
         _owner(current_user),
         upload=file,
-        project_id=project_id,
-        research_id=research_id,
+        project_id=clean_project_id,
+        research_id=clean_research_id,
     )
     return DocumentRecord.model_validate(row)
 
@@ -227,3 +251,97 @@ async def delete_document(
 ) -> DeletedDocumentResponse:
     service.delete_document(document_id, _owner(current_user))
     return DeletedDocumentResponse(status="deleted", document_id=document_id)
+
+
+# ── Document Preview & Chat With Documents ─────────────────────────────────
+
+@router.get(
+    "/documents/{document_id}/preview",
+    responses=_ERRORS,
+    summary="Get structured text preview and page breakdown for a document",
+)
+async def get_document_preview(
+    document_id: str = DocumentIdPath,
+    current_user: dict = Depends(get_current_user),
+    service: DocumentService = Depends(get_document_service),
+) -> Dict[str, Any]:
+    return service.get_document_preview(document_id, _owner(current_user))
+
+
+@router.post(
+    "/documents/{document_id}/chat",
+    responses=_ERRORS,
+    summary="Ask a question grounded in a single research document",
+)
+async def chat_with_document(
+    payload: DocumentChatRequest,
+    document_id: str = DocumentIdPath,
+    current_user: dict = Depends(get_current_user),
+    chat_svc: DocumentChatService = Depends(get_document_chat_service),
+) -> Dict[str, Any]:
+    return chat_svc.chat_with_document(
+        user_id=_owner(current_user),
+        document_id=document_id,
+        question=payload.question,
+        conversation_id=payload.conversation_id,
+    )
+
+
+@router.post(
+    "/documents/chat/multi",
+    responses=_ERRORS,
+    summary="Ask a question comparing multiple research documents",
+)
+async def chat_multi_document(
+    payload: MultiDocumentChatRequest,
+    current_user: dict = Depends(get_current_user),
+    chat_svc: DocumentChatService = Depends(get_document_chat_service),
+) -> Dict[str, Any]:
+    return chat_svc.chat_multi_document(
+        user_id=_owner(current_user),
+        document_ids=payload.document_ids,
+        question=payload.question,
+        conversation_id=payload.conversation_id,
+    )
+
+
+@router.get(
+    "/documents/{document_id}/conversations",
+    responses=_ERRORS,
+    summary="List chat conversations for a document",
+)
+async def list_document_conversations(
+    document_id: str = DocumentIdPath,
+    current_user: dict = Depends(get_current_user),
+    chat_svc: DocumentChatService = Depends(get_document_chat_service),
+) -> List[Dict[str, Any]]:
+    return chat_svc.list_conversations(_owner(current_user), document_id=document_id)
+
+
+@router.get(
+    "/documents/{document_id}/conversations/{conversation_id}",
+    responses=_ERRORS,
+    summary="Get conversation history and citations for a document chat",
+)
+async def get_document_conversation(
+    conversation_id: str,
+    document_id: str = DocumentIdPath,
+    current_user: dict = Depends(get_current_user),
+    chat_svc: DocumentChatService = Depends(get_document_chat_service),
+) -> Dict[str, Any]:
+    return chat_svc.get_conversation_history(conversation_id, _owner(current_user))
+
+
+@router.delete(
+    "/documents/{document_id}/conversations/{conversation_id}",
+    responses=_ERRORS,
+    summary="Delete a document chat conversation",
+)
+async def delete_document_conversation(
+    conversation_id: str,
+    document_id: str = DocumentIdPath,
+    current_user: dict = Depends(get_current_user),
+    chat_svc: DocumentChatService = Depends(get_document_chat_service),
+) -> Dict[str, Any]:
+    success = chat_svc.delete_conversation(conversation_id, _owner(current_user))
+    return {"status": "deleted" if success else "not_found", "conversation_id": conversation_id}

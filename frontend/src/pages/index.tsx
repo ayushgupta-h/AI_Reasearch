@@ -22,7 +22,8 @@ import {
   FileDown, FileText, Files, FolderKanban, GitCompare, History, Loader2, LogOut,
   Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Plus,
   RefreshCw, Search, Send, Settings, ShieldCheck, Sun, Trash2, X, UploadCloud,
-  CheckCircle2, XCircle, ArrowUpRight, DollarSign, Cpu, Eye, Download, Filter, Clock, Sparkles
+  CheckCircle2, XCircle, ArrowUpRight, DollarSign, Cpu, Eye, Download, Filter, Clock, Sparkles,
+  ArrowLeft, MessageSquare, Copy, ChevronLeft, BookOpen, Layers, Bot
 } from 'lucide-react';
 
 import { ReportViewer } from '../components/ReportViewer';
@@ -31,7 +32,8 @@ import { API, API_BASE } from '../api/endpoints';
 import type {
   ClaimRecord, Project, ResearchReport, ResearchSession, SourceRef,
   DocumentRecord, ContradictionRecord, MemoryRecord, KnowledgeStats, HealthStatus,
-  ProvidersResponse, UsageSummaryResponse, NotificationRecord
+  ProvidersResponse, UsageSummaryResponse, NotificationRecord,
+  DocumentCitation, DocumentChatMessage, DocumentConversation, DocumentPreview
 } from '../api/types';
 import { streamSSE, type SSEMessage } from '../lib/sse';
 import { supabaseConfigured } from '../lib/supabase';
@@ -2217,8 +2219,570 @@ export function ProjectsPage() {
 }
 
 /* ============================================================
- * SECTION 10 — DOCUMENTS (FULL UI IMPLEMENTATION)
+ * SECTION 10 — DOCUMENTS (FULL UI IMPLEMENTATION + CHAT WITH DOCUMENTS)
  * ============================================================ */
+
+interface DocumentChatWorkspaceProps {
+  document: DocumentRecord | null;
+  multiDocuments?: DocumentRecord[];
+  projectMap: Map<string, string>;
+  onBack: () => void;
+}
+
+function DocumentChatWorkspace({
+  document,
+  multiDocuments = [],
+  projectMap,
+  onBack,
+}: DocumentChatWorkspaceProps) {
+  const toast = useToast();
+  const isMulti = multiDocuments.length > 1 || !document;
+  const primaryDoc = document || multiDocuments[0];
+  const docId = primaryDoc ? (primaryDoc.document_id || primaryDoc.id || '') : '';
+
+  // Document preview state
+  const [preview, setPreview] = useState<DocumentPreview | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [activePage, setActivePage] = useState(1);
+  const [searchInDoc, setSearchInDoc] = useState('');
+
+  // Chat conversation state
+  const [conversations, setConversations] = useState<DocumentConversation[]>([]);
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<DocumentChatMessage[]>([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [question, setQuestion] = useState('');
+  const [sending, setSending] = useState(false);
+  const [activeCitation, setActiveCitation] = useState<DocumentCitation | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
+
+  // Load document preview
+  useEffect(() => {
+    if (!docId || isMulti) return;
+    let cancelled = false;
+    setLoadingPreview(true);
+    api.get<DocumentPreview>(API.documents.preview(docId))
+      .then((res) => {
+        if (!cancelled && res.data) {
+          setPreview(res.data);
+          setActivePage(1);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) loggerWarn('Failed loading preview', err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPreview(false);
+      });
+    return () => { cancelled = true; };
+  }, [docId, isMulti]);
+
+  // Load conversations
+  const loadConversations = useCallback(async () => {
+    if (!docId || isMulti) return;
+    try {
+      const res = await api.get<DocumentConversation[]>(API.documents.conversations(docId));
+      if (res.data) {
+        setConversations(asList<DocumentConversation>(res.data));
+      }
+    } catch (_) {}
+  }, [docId, isMulti]);
+
+  useEffect(() => {
+    loadConversations();
+  }, [loadConversations]);
+
+  // Load message history when active conversation changes
+  useEffect(() => {
+    if (!docId || !activeConvId) {
+      setMessages([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingMessages(true);
+    api.get<{ conversation: DocumentConversation; messages: DocumentChatMessage[] }>(
+      API.documents.conversation(docId, activeConvId)
+    )
+      .then((res) => {
+        if (!cancelled && res.data?.messages) {
+          setMessages(res.data.messages);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) toast.push(apiError(err), 'error');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingMessages(false);
+      });
+    return () => { cancelled = true; };
+  }, [docId, activeConvId]);
+
+  // Scroll to bottom of message thread
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, sending]);
+
+  // Scroll to highlighted citation passage in left panel
+  useEffect(() => {
+    if (activeCitation) {
+      highlightRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [activeCitation]);
+
+  const handleSend = async (customQ?: string) => {
+    const qToSend = (customQ || question).trim();
+    if (!qToSend || sending) return;
+
+    setQuestion('');
+    setSending(true);
+
+    // Optimistically show user message
+    const tempUserMsg: DocumentChatMessage = {
+      message_id: 'temp-' + Date.now(),
+      role: 'user',
+      content: qToSend,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, tempUserMsg]);
+
+    try {
+      if (isMulti) {
+        const docIds = multiDocuments.map((d) => d.document_id || d.id || '');
+        const res = await api.post<{
+          conversation_id: string;
+          message_id: string;
+          answer: string;
+          citations: DocumentCitation[];
+          provider: string;
+          created_at: string;
+        }>(API.documents.chatMulti, {
+          question: qToSend,
+          document_ids: docIds,
+          conversation_id: activeConvId || undefined,
+        });
+
+        const asstMsg: DocumentChatMessage = {
+          message_id: res.data.message_id || 'asst-' + Date.now(),
+          role: 'assistant',
+          content: res.data.answer,
+          citations: res.data.citations || [],
+          created_at: res.data.created_at || new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, asstMsg]);
+        if (res.data.conversation_id && !activeConvId) {
+          setActiveConvId(res.data.conversation_id);
+        }
+      } else {
+        const res = await api.post<{
+          conversation_id: string;
+          message_id: string;
+          answer: string;
+          citations: DocumentCitation[];
+          provider: string;
+          created_at: string;
+        }>(API.documents.chat(docId), {
+          question: qToSend,
+          conversation_id: activeConvId || undefined,
+        });
+
+        const asstMsg: DocumentChatMessage = {
+          message_id: res.data.message_id || 'asst-' + Date.now(),
+          role: 'assistant',
+          content: res.data.answer,
+          citations: res.data.citations || [],
+          created_at: res.data.created_at || new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, asstMsg]);
+        if (res.data.conversation_id && !activeConvId) {
+          setActiveConvId(res.data.conversation_id);
+          loadConversations();
+        }
+      }
+    } catch (err) {
+      toast.push(apiError(err), 'error');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const startNewChat = () => {
+    setActiveConvId(null);
+    setMessages([]);
+    setActiveCitation(null);
+  };
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+    toast.push('Copied to clipboard', 'success');
+  };
+
+  const downloadDoc = async (id: string, filename: string) => {
+    try {
+      const token = getAccessToken();
+      const res = await fetch(`${API_BASE}/documents/${id}/download`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.push('Download started.', 'success');
+    } catch (e) {
+      toast.push(apiError(e), 'error');
+    }
+  };
+
+  const starterQuestions = [
+    'Summarize this document and its key takeaways.',
+    'What are the core conclusions and strategic recommendations?',
+    'Explain the methodology, data sources, and sample size.',
+    'List all notable financial metrics, figures, and dates mentioned.',
+  ];
+
+  const totalPages = preview?.total_pages || (preview?.pages ? preview.pages.length : 1);
+  const currentPageData = preview?.pages?.find((p) => p.page_number === activePage) || preview?.pages?.[0];
+  const displayedText = currentPageData ? currentPageData.text : (preview?.preview_text || '');
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-80px)] min-h-[650px] space-y-3">
+      {/* Top Workspace Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#453322] bg-[#14110D] px-4 py-3 shadow-md shrink-0">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="sm" onClick={onBack} className="text-[#C5A36A] hover:text-[#E9D6B6]">
+            <ArrowLeft className="h-4 w-4" /> Back to Documents
+          </Button>
+          <div className="h-4 w-px bg-[#302319]" />
+          <div>
+            <div className="flex items-center gap-2">
+              <FileText className="h-4 w-4 text-[#C5A36A]" />
+              <h2 className="font-serif text-base font-semibold text-[#E9D6B6]">
+                {isMulti ? `Comparative Chat (${multiDocuments.length} Documents)` : primaryDoc?.original_filename}
+              </h2>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-[#817463]">
+              {isMulti ? (
+                <span>Comparing: {multiDocuments.map((d) => d.original_filename).join(', ')}</span>
+              ) : (
+                <>
+                  <span>{(primaryDoc?.size_bytes ? primaryDoc.size_bytes / 1024 : 0).toFixed(1)} KB</span>
+                  <span>•</span>
+                  <span>{preview?.chunk_count ?? primaryDoc?.chunk_count ?? 0} vector chunks</span>
+                  {primaryDoc?.project_id && projectMap.get(primaryDoc.project_id) && (
+                    <>
+                      <span>•</span>
+                      <span className="text-[#C5A36A] font-mono">{projectMap.get(primaryDoc.project_id)}</span>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {!isMulti && primaryDoc && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => downloadDoc(docId, primaryDoc.original_filename)}
+              title="Download original file"
+            >
+              <Download className="h-3.5 w-3.5" /> Download
+            </Button>
+          )}
+          <Button variant="primary" size="sm" onClick={startNewChat}>
+            <Plus className="h-3.5 w-3.5" /> New Chat
+          </Button>
+        </div>
+      </div>
+
+      {/* Main Two-Panel Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 min-h-0">
+        {/* Left Panel: Document Viewer */}
+        <div className="lg:col-span-6 flex flex-col rounded-xl border border-[#453322] bg-[#10100E] overflow-hidden shadow-lg min-h-0">
+          <div className="flex items-center justify-between border-b border-[#302319] bg-[#14110D] px-4 py-2.5 shrink-0">
+            <div className="flex items-center gap-2">
+              <BookOpen className="h-4 w-4 text-[#C5A36A]" />
+              <span className="font-serif text-sm font-medium text-[#E9D6B6]">
+                {isMulti ? 'Document Excerpts' : 'Document Content & Pages'}
+              </span>
+            </div>
+
+            {!isMulti && totalPages > 1 && (
+              <div className="flex items-center gap-1.5 text-xs text-[#817463]">
+                <button
+                  disabled={activePage <= 1}
+                  onClick={() => setActivePage((p) => Math.max(1, p - 1))}
+                  className="rounded p-1 text-[#817463] hover:text-[#E9D6B6] disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <span className="font-mono text-[#E9D6B6]">
+                  Page {activePage} of {totalPages}
+                </span>
+                <button
+                  disabled={activePage >= totalPages}
+                  onClick={() => setActivePage((p) => Math.min(totalPages, p + 1))}
+                  className="rounded p-1 text-[#817463] hover:text-[#E9D6B6] disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Document Body / Pages */}
+          <div className="flex-1 overflow-y-auto p-5 text-xs leading-relaxed text-[#D2C5B3] space-y-4">
+            {loadingPreview ? (
+              <div className="space-y-3">
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-5/6" />
+                <Skeleton className="h-24 w-full" />
+              </div>
+            ) : isMulti ? (
+              <div className="space-y-4">
+                <div className="rounded-lg border border-[#302319] bg-[#14110D] p-3 text-xs text-[#817463]">
+                  Comparing {multiDocuments.length} research documents simultaneously. When the assistant responds, citations will link directly to the relevant passages below.
+                </div>
+                {multiDocuments.map((doc, idx) => (
+                  <div key={doc.document_id || doc.id} className="rounded-lg border border-[#302319] bg-[#14110D] p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-[#E9D6B6]">
+                        [{idx + 1}] {doc.original_filename}
+                      </span>
+                      <span className="font-mono text-[10px] text-[#C5A36A]">
+                        {doc.chunk_count ?? 0} indexed chunks
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-[#817463]">
+                      {(doc.size_bytes / 1024).toFixed(1)} KB • {doc.processing_status}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {activeCitation && (
+                  <div
+                    ref={highlightRef}
+                    className="rounded-lg border border-[#C5A36A] bg-[#C5A36A]/10 p-3 text-xs text-[#E9D6B6] shadow-sm animate-pulse"
+                  >
+                    <div className="flex items-center justify-between mb-1.5 font-semibold text-[#C5A36A]">
+                      <span>Cited Passage [{activeCitation.index}] {activeCitation.page_number ? `· Page ${activeCitation.page_number}` : ''}</span>
+                      <button onClick={() => setActiveCitation(null)} className="text-[#817463] hover:text-[#E9D6B6]">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <p className="font-mono leading-relaxed">{activeCitation.text || activeCitation.snippet}</p>
+                  </div>
+                )}
+
+                <div className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-[#C0B19C] select-text">
+                  {displayedText || 'No readable text content extracted yet. The document is indexed into vector embeddings for question answering.'}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Panel: AI Document Assistant */}
+        <div className="lg:col-span-6 flex flex-col rounded-xl border border-[#453322] bg-[#10100E] overflow-hidden shadow-lg min-h-0">
+          {/* Assistant Header */}
+          <div className="flex items-center justify-between border-b border-[#302319] bg-[#14110D] px-4 py-2.5 shrink-0">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-[#C5A36A]" />
+              <span className="font-serif text-sm font-medium text-[#E9D6B6]">AI Document Assistant</span>
+              <span className="rounded bg-[#C5A36A]/10 px-2 py-0.5 text-[10px] font-mono text-[#C5A36A] border border-[#C5A36A]/20">
+                Grounded RAG
+              </span>
+            </div>
+
+            {conversations.length > 0 && !isMulti && (
+              <select
+                value={activeConvId || ''}
+                onChange={(e) => setActiveConvId(e.target.value || null)}
+                className="max-w-[180px] truncate rounded border border-[#302319] bg-[#10100E] px-2 py-1 text-xs text-[#E9D6B6] focus:outline-none focus:border-[#C5A36A]"
+                title="Previous chats"
+              >
+                <option value="">Current Thread</option>
+                {conversations.map((c) => (
+                  <option key={c.conversation_id} value={c.conversation_id}>
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Conversation Message Feed */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
+            {loadingMessages ? (
+              <div className="space-y-3">
+                <Skeleton className="h-12 w-3/4 ml-auto" />
+                <Skeleton className="h-28 w-full" />
+              </div>
+            ) : messages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-center py-6 px-4">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#C5A36A]/10 border border-[#C5A36A]/20 text-[#C5A36A] mb-3">
+                  <Bot className="h-6 w-6" />
+                </div>
+                <h3 className="font-serif text-base font-semibold text-[#E9D6B6] mb-1">
+                  Chat with {isMulti ? `${multiDocuments.length} Documents` : primaryDoc?.original_filename}
+                </h3>
+                <p className="text-xs text-[#817463] max-w-md mb-5 leading-relaxed">
+                  Ask targeted questions, verify claims, compare sections, or extract numbers. Every answer is grounded directly in document passages with traceable citations.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-lg">
+                  {starterQuestions.map((q, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => handleSend(q)}
+                      className="rounded-lg border border-[#302319] bg-[#14110D] p-2.5 text-left text-xs text-[#C0B19C] hover:border-[#C5A36A] hover:text-[#E9D6B6] hover:bg-[#1B1510] transition-colors"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              messages.map((m) => (
+                <div
+                  key={m.message_id}
+                  className={cn(
+                    'flex flex-col',
+                    m.role === 'user' ? 'items-end' : 'items-start'
+                  )}
+                >
+                  <div
+                    className={cn(
+                      'rounded-xl px-4 py-3 text-xs leading-relaxed max-w-[92%]',
+                      m.role === 'user'
+                        ? 'bg-[#221A12] text-[#F4EBDD] border border-[#453322]'
+                        : 'bg-[#14110D] text-[#E0D7C9] border border-[#302319] shadow-md w-full'
+                    )}
+                  >
+                    {m.role === 'user' ? (
+                      <p className="whitespace-pre-wrap">{m.content}</p>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="prose prose-invert prose-xs max-w-none">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {m.content}
+                          </ReactMarkdown>
+                        </div>
+
+                        {/* Citation Badges */}
+                        {m.citations && m.citations.length > 0 && (
+                          <div className="pt-2 border-t border-[#302319]">
+                            <span className="text-[11px] font-medium text-[#817463] block mb-1.5">
+                              Sources & Citations:
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {m.citations.map((c, cIdx) => (
+                                <button
+                                  key={cIdx}
+                                  onClick={() => {
+                                    setActiveCitation(c);
+                                    if (c.page_number && typeof c.page_number === 'number') {
+                                      setActivePage(c.page_number);
+                                    }
+                                  }}
+                                  className={cn(
+                                    'inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-mono transition-colors border',
+                                    activeCitation?.index === c.index
+                                      ? 'bg-[#C5A36A] text-[#10100E] font-bold border-[#C5A36A]'
+                                      : 'bg-[#C5A36A]/10 text-[#C5A36A] border-[#C5A36A]/30 hover:bg-[#C5A36A]/20'
+                                  )}
+                                  title={c.snippet || c.text || 'View cited passage'}
+                                >
+                                  [{c.index}] {c.filename} {c.page_number ? `· p.${c.page_number}` : ''}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-end gap-2 pt-1 text-[11px] text-[#817463]">
+                          <button
+                            onClick={() => copyToClipboard(m.content, m.message_id)}
+                            className="inline-flex items-center gap-1 hover:text-[#C5A36A]"
+                          >
+                            <Copy className="h-3 w-3" />
+                            {copiedId === m.message_id ? 'Copied!' : 'Copy'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+
+            {sending && (
+              <div className="flex items-center gap-2 rounded-lg border border-[#302319] bg-[#14110D] p-3 text-xs text-[#C5A36A]">
+                <Loader2 className="h-4 w-4 animate-spin text-[#C5A36A]" />
+                <span>Searching document vector passages and synthesizing answer...</span>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Input Footer */}
+          <div className="border-t border-[#302319] bg-[#14110D] p-3 shrink-0">
+            <div className="flex items-end gap-2">
+              <textarea
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder={
+                  isMulti
+                    ? 'Ask a question comparing these documents (Enter to send)...'
+                    : 'Ask anything grounded in this document (Enter to send)...'
+                }
+                rows={2}
+                className="flex-1 resize-none rounded-lg border border-[#453322] bg-[#10100E] p-2.5 text-xs text-[#E9D6B6] placeholder-[#817463] focus:outline-none focus:border-[#C5A36A]"
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={!question.trim() || sending}
+                loading={sending}
+                onClick={() => handleSend()}
+                className="h-9 px-3"
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function loggerWarn(msg: string, err: unknown) {
+  try {
+    console.warn(`[DocumentChatWorkspace] ${msg}:`, err);
+  } catch (_) {}
+}
 
 export function DocumentsPage() {
   const qc = useQueryClient();
@@ -2231,11 +2795,13 @@ export function DocumentsPage() {
 
   const [searchQ, setSearchQ] = useState('');
   const [projectFilter, setProjectFilter] = useState('all');
-  const [uploadProjectId, setUploadProjectId] = useState<string>('');
   const [uploading, setUploading] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [previewDoc, setPreviewDoc] = useState<DocumentRecord | null>(null);
   const [deleteDocId, setDeleteDocId] = useState<string | null>(null);
+  const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
+  const [chatDoc, setChatDoc] = useState<DocumentRecord | null>(null);
+  const [isMultiChat, setIsMultiChat] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const projectMap = useMemo(() => {
@@ -2253,15 +2819,16 @@ export function DocumentsPage() {
     setUploading(true);
     const fd = new FormData();
     fd.append('file', f);
-    if (uploadProjectId) {
-      fd.append('project_id', uploadProjectId);
+    if (projectFilter && projectFilter !== 'all') {
+      fd.append('project_id', projectFilter);
     }
     try {
       await api.post(API.documents.upload, fd);
       toast.push('Document uploaded. Parsing and embedding pipeline started.', 'success');
       qc.invalidateQueries({ queryKey: ['documents'] });
-    } catch (err) { toast.push(apiError(err), 'error'); }
-    finally {
+    } catch (err) {
+      toast.push(apiError(err), 'error');
+    } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
     }
@@ -2276,7 +2843,13 @@ export function DocumentsPage() {
       if (previewDoc && (previewDoc.document_id === id || previewDoc.id === id)) {
         setPreviewDoc(null);
       }
-    } catch (err) { toast.push(apiError(err), 'error'); }
+      if (chatDoc && (chatDoc.document_id === id || chatDoc.id === id)) {
+        setChatDoc(null);
+      }
+      setSelectedDocIds((prev) => prev.filter((dId) => dId !== id));
+    } catch (err) {
+      toast.push(apiError(err), 'error');
+    }
   };
 
   const processDoc = async (id: string) => {
@@ -2314,33 +2887,48 @@ export function DocumentsPage() {
     }
   };
 
+  const toggleSelectDoc = (id: string) => {
+    setSelectedDocIds((prev) =>
+      prev.includes(id) ? prev.filter((dId) => dId !== id) : [...prev, id]
+    );
+  };
+
   const filtered = documents
     .filter((d) => !searchQ || d.original_filename.toLowerCase().includes(searchQ.toLowerCase()))
     .filter((d) => projectFilter === 'all' || d.project_id === projectFilter);
 
+  const selectedDocs = useMemo(() => {
+    return documents.filter((d) => selectedDocIds.includes(d.document_id || d.id || ''));
+  }, [documents, selectedDocIds]);
+
+  // If in Chat Workspace view, render the 2-panel workspace!
+  if (chatDoc || isMultiChat) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-4">
+        <DocumentChatWorkspace
+          document={chatDoc}
+          multiDocuments={isMultiChat ? selectedDocs : []}
+          projectMap={projectMap}
+          onBack={() => {
+            setChatDoc(null);
+            setIsMultiChat(false);
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
+      {/* Header: Note duplicate select has been cleanly removed */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Knowledge Documents</h1>
-          <p className="text-xs text-[#817463]">Upload research papers, PDFs, DOCX, and texts to feed local RAG and vector embeddings.</p>
+          <p className="text-xs text-[#817463]">
+            Upload research papers, PDFs, DOCX, and texts to feed local RAG, vector embeddings, and interactive AI chat.
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          {projects.length > 0 && (
-            <select
-              value={uploadProjectId}
-              onChange={(e) => setUploadProjectId(e.target.value)}
-              className="rounded-lg border border-[#453322] bg-[#14110D] px-2.5 py-1.5 text-xs text-[#E9D6B6] focus:outline-none focus:border-[#C5A36A]"
-              title="Target project for upload"
-            >
-              <option value="">No Project (General)</option>
-              {projects.map((p) => (
-                <option key={p.project_id || p.id} value={p.project_id || p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
           <input ref={fileRef} type="file" hidden accept=".pdf,.docx,.txt,.md" onChange={onUpload} />
           <Button variant="primary" size="sm" loading={uploading} onClick={() => fileRef.current?.click()}>
             <UploadCloud className="h-4 w-4" /> Upload Document
@@ -2348,6 +2936,7 @@ export function DocumentsPage() {
         </div>
       </div>
 
+      {/* Filter and Search Bar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-5">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#817463]" />
@@ -2377,6 +2966,26 @@ export function DocumentsPage() {
         )}
       </div>
 
+      {/* Multi-Document Selection Banner */}
+      {selectedDocIds.length >= 2 && (
+        <div className="mb-4 flex items-center justify-between rounded-xl border border-[#C5A36A] bg-[#C5A36A]/10 px-4 py-3 text-xs text-[#E9D6B6] shadow-md animate-fade-in">
+          <div className="flex items-center gap-2">
+            <GitCompare className="h-4 w-4 text-[#C5A36A]" />
+            <span>
+              <strong>{selectedDocIds.length} documents selected</strong> for cross-document analysis
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setSelectedDocIds([])}>
+              Clear
+            </Button>
+            <Button size="sm" variant="primary" onClick={() => setIsMultiChat(true)}>
+              <MessageSquare className="h-3.5 w-3.5" /> Start Comparative Chat
+            </Button>
+          </div>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16" />)}</div>
       ) : filtered.length === 0 ? (
@@ -2390,6 +2999,21 @@ export function DocumentsPage() {
           <table className="w-full text-left text-sm">
             <thead className="border-b border-[#302319] bg-[#14110D] text-xs font-mono text-[#817463]">
               <tr>
+                <th className="p-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={selectedDocIds.length === filtered.length && filtered.length > 0}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedDocIds(filtered.map((d) => d.document_id || d.id || ''));
+                      } else {
+                        setSelectedDocIds([]);
+                      }
+                    }}
+                    className="rounded border-[#453322] bg-[#14110D] text-[#C5A36A] focus:ring-0"
+                    title="Select all"
+                  />
+                </th>
                 <th className="p-3">File Name</th>
                 <th className="p-3">Project</th>
                 <th className="p-3">Size</th>
@@ -2405,15 +3029,25 @@ export function DocumentsPage() {
                 const pName = d.project_id ? projectMap.get(d.project_id) : null;
                 const isProcessing = processingId === docId;
                 const canProcess = d.processing_status === 'uploaded' || d.processing_status === 'failed';
+                const isSelected = selectedDocIds.includes(docId);
 
                 return (
-                  <tr key={docId} className="hover:bg-[#1B1510] transition-colors">
+                  <tr key={docId} className={cn('hover:bg-[#1B1510] transition-colors', isSelected && 'bg-[#1C1610]')}>
+                    <td className="p-3">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelectDoc(docId)}
+                        className="rounded border-[#453322] bg-[#14110D] text-[#C5A36A] focus:ring-0"
+                      />
+                    </td>
                     <td className="p-3 font-medium text-[#F4EBDD]">
                       <button
-                        onClick={() => setPreviewDoc(d)}
-                        className="flex items-center gap-2 hover:text-[#C5A36A] text-left"
+                        onClick={() => setChatDoc(d)}
+                        className="flex items-center gap-2 hover:text-[#C5A36A] text-left group"
+                        title="Open Document Chat"
                       >
-                        <FileText className="h-4 w-4 text-[#C5A36A] shrink-0" />
+                        <FileText className="h-4 w-4 text-[#C5A36A] shrink-0 group-hover:scale-110 transition-transform" />
                         <span className="truncate max-w-xs">{d.original_filename}</span>
                       </button>
                     </td>
@@ -2433,35 +3067,45 @@ export function DocumentsPage() {
                     </td>
                     <td className="p-3 text-xs">{fmtDate(d.created_at)}</td>
                     <td className="p-3 text-right">
-                      <div className="flex items-center justify-end gap-2 text-xs">
+                      <div className="flex items-center justify-end gap-1.5 text-xs">
+                        {/* Primary Chat Button */}
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => setChatDoc(d)}
+                          className="h-7 px-2.5 text-xs gap-1"
+                          title="Chat with this document"
+                        >
+                          <MessageSquare className="h-3 w-3" /> Chat
+                        </Button>
+
                         {canProcess && (
                           <button
                             onClick={() => processDoc(docId)}
                             disabled={isProcessing}
-                            className="inline-flex items-center gap-1 text-[#C5A36A] hover:underline"
+                            className="inline-flex items-center gap-1 p-1.5 text-[#C5A36A] hover:bg-[#C5A36A]/10 rounded"
                             title="Extract text, chunk, and index into ChromaDB"
                           >
-                            {isProcessing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-                            Process
+                            {isProcessing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                           </button>
                         )}
                         <button
                           onClick={() => downloadDoc(docId, d.original_filename)}
-                          className="p-1 text-[#817463] hover:text-[#F4EBDD]"
+                          className="p-1.5 text-[#817463] hover:text-[#F4EBDD] hover:bg-[#302319]/50 rounded"
                           title="Download Document"
                         >
                           <Download className="h-3.5 w-3.5" />
                         </button>
                         <button
                           onClick={() => setPreviewDoc(d)}
-                          className="p-1 text-[#817463] hover:text-[#C5A36A]"
+                          className="p-1.5 text-[#817463] hover:text-[#C5A36A] hover:bg-[#302319]/50 rounded"
                           title="View Details"
                         >
                           <Eye className="h-3.5 w-3.5" />
                         </button>
                         <button
                           onClick={() => setDeleteDocId(docId)}
-                          className="p-1 text-red-400 hover:text-red-300"
+                          className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded"
                           title="Delete Document"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -2476,7 +3120,7 @@ export function DocumentsPage() {
         </div>
       )}
 
-      {/* Document Preview & Details Modal */}
+      {/* Document Details Modal */}
       <Dialog open={!!previewDoc} onClose={() => setPreviewDoc(null)} title={previewDoc?.original_filename || 'Document Details'}>
         {previewDoc && (() => {
           const docId = previewDoc.document_id || previewDoc.id || '';
@@ -2519,15 +3163,16 @@ export function DocumentsPage() {
 
               <div className="flex justify-end gap-2 pt-2 border-t border-[#302319]">
                 <Button onClick={() => setPreviewDoc(null)}>Close</Button>
-                {(previewDoc.processing_status === 'uploaded' || previewDoc.processing_status === 'failed') && (
-                  <Button
-                    variant="primary"
-                    loading={processingId === docId}
-                    onClick={() => processDoc(docId)}
-                  >
-                    <Sparkles className="h-4 w-4" /> Index Vector Embeddings
-                  </Button>
-                )}
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    const d = previewDoc;
+                    setPreviewDoc(null);
+                    setChatDoc(d);
+                  }}
+                >
+                  <MessageSquare className="h-4 w-4" /> Open Document Chat
+                </Button>
                 <Button onClick={() => downloadDoc(docId, previewDoc.original_filename)}>
                   <Download className="h-4 w-4" /> Download File
                 </Button>

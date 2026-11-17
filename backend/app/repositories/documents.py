@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS documents (
     processing_status TEXT NOT NULL,
     error_code        TEXT,
     error_message     TEXT,
+    chunk_count       INTEGER DEFAULT 0,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
     UNIQUE(owner_id, sha256)
@@ -41,6 +42,30 @@ _CREATE_INDEX = (
     "CREATE INDEX IF NOT EXISTS idx_documents_owner "
     "ON documents(owner_id, created_at);"
 )
+
+_CREATE_CONVERSATIONS = """
+CREATE TABLE IF NOT EXISTS document_conversations (
+    conversation_id   TEXT PRIMARY KEY,
+    owner_id          TEXT NOT NULL,
+    document_id       TEXT NOT NULL,
+    project_id        TEXT,
+    title             TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+"""
+
+_CREATE_MESSAGES = """
+CREATE TABLE IF NOT EXISTS document_chat_messages (
+    message_id        TEXT PRIMARY KEY,
+    conversation_id   TEXT NOT NULL,
+    owner_id          TEXT NOT NULL,
+    role              TEXT NOT NULL,
+    content           TEXT NOT NULL,
+    citations_json    TEXT,
+    created_at        TEXT NOT NULL
+);
+"""
 
 _COLUMNS = (
     "document_id, owner_id, project_id, research_id, original_filename, "
@@ -70,12 +95,21 @@ class DocumentRepository:
                 return
             self._db.execute(_CREATE_DOCUMENTS)
             self._db.execute(_CREATE_INDEX)
+            self._db.execute(_CREATE_CONVERSATIONS)
+            self._db.execute(_CREATE_MESSAGES)
             try:
-                cols = [col[1] for col in self._db.fetch_all("PRAGMA table_info(documents)")]
-                if "chunk_count" not in cols:
+                info = self._db.fetch_all("PRAGMA table_info(documents)")
+                cols = {
+                    (r["name"] if isinstance(r, dict) else r[1])
+                    for r in info
+                }
+                if cols and "chunk_count" not in cols:
                     self._db.execute("ALTER TABLE documents ADD COLUMN chunk_count INTEGER DEFAULT 0")
             except Exception:
-                pass
+                try:
+                    self._db.execute("ALTER TABLE documents ADD COLUMN chunk_count INTEGER DEFAULT 0")
+                except Exception:
+                    pass
             self._schema_ready = True
 
     def create(
@@ -232,6 +266,123 @@ class DocumentRepository:
             (document_id, owner_id),
         )
         return affected > 0
+
+    # ── Conversational Document Chat ───────────────────────────────────────
+
+    def create_conversation(
+        self,
+        owner_id: str,
+        document_id: str,
+        title: str = "Document Chat",
+        project_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        self.ensure_schema()
+        conversation_id = uuid.uuid4().hex
+        now = utc_iso()
+        self._db.execute(
+            "INSERT INTO document_conversations "
+            "(conversation_id, owner_id, document_id, project_id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (conversation_id, owner_id, document_id, project_id, title, now, now),
+        )
+        return {
+            "conversation_id": conversation_id,
+            "owner_id": owner_id,
+            "document_id": document_id,
+            "project_id": project_id,
+            "title": title,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def list_conversations(
+        self,
+        owner_id: str,
+        document_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        self.ensure_schema()
+        if document_id:
+            rows = self._db.fetch_all(
+                "SELECT conversation_id, owner_id, document_id, project_id, title, created_at, updated_at "
+                "FROM document_conversations WHERE owner_id = ? AND document_id = ? "
+                "ORDER BY updated_at DESC",
+                (owner_id, document_id),
+            )
+        else:
+            rows = self._db.fetch_all(
+                "SELECT conversation_id, owner_id, document_id, project_id, title, created_at, updated_at "
+                "FROM document_conversations WHERE owner_id = ? "
+                "ORDER BY updated_at DESC",
+                (owner_id,),
+            )
+        return [dict(r) for r in rows]
+
+    def get_conversation(self, conversation_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
+        self.ensure_schema()
+        row = self._db.fetch_one(
+            "SELECT conversation_id, owner_id, document_id, project_id, title, created_at, updated_at "
+            "FROM document_conversations WHERE conversation_id = ? AND owner_id = ?",
+            (conversation_id, owner_id),
+        )
+        return dict(row) if row else None
+
+    def delete_conversation(self, conversation_id: str, owner_id: str) -> bool:
+        self.ensure_schema()
+        self._db.execute(
+            "DELETE FROM document_chat_messages WHERE conversation_id = ? AND owner_id = ?",
+            (conversation_id, owner_id),
+        )
+        affected = self._db.execute(
+            "DELETE FROM document_conversations WHERE conversation_id = ? AND owner_id = ?",
+            (conversation_id, owner_id),
+        )
+        return affected > 0
+
+    def add_message(
+        self,
+        conversation_id: str,
+        owner_id: str,
+        role: str,
+        content: str,
+        citations_json: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        self.ensure_schema()
+        message_id = uuid.uuid4().hex
+        now = utc_iso()
+        self._db.execute(
+            "INSERT INTO document_chat_messages "
+            "(message_id, conversation_id, owner_id, role, content, citations_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (message_id, conversation_id, owner_id, role, content, citations_json, now),
+        )
+        self._db.execute(
+            "UPDATE document_conversations SET updated_at = ? WHERE conversation_id = ? AND owner_id = ?",
+            (now, conversation_id, owner_id),
+        )
+        return {
+            "message_id": message_id,
+            "conversation_id": conversation_id,
+            "owner_id": owner_id,
+            "role": role,
+            "content": content,
+            "citations_json": citations_json,
+            "created_at": now,
+        }
+
+    def get_messages(
+        self,
+        conversation_id: str,
+        owner_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        self.ensure_schema()
+        rows = self._db.fetch_all(
+            "SELECT message_id, conversation_id, owner_id, role, content, citations_json, created_at "
+            "FROM document_chat_messages WHERE conversation_id = ? AND owner_id = ? "
+            "ORDER BY created_at ASC LIMIT ?",
+            (conversation_id, owner_id, limit),
+        )
+        return [dict(r) for r in rows]
 
 
 __all__ = ["DocumentRepository"]

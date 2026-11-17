@@ -90,6 +90,7 @@ from app.services.source_service import SourceService
 from app.services.chat_service import ChatService
 from app.services.contradiction_detection import ContradictionDetectionService
 from app.services.document_service import DocumentService
+from app.services.document_chat_service import DocumentChatService
 from app.services.project_service import ProjectService
 from app.services.report_management_service import ReportManagementService
 from app.services.report_generation_service import ReportGenerationService
@@ -125,6 +126,7 @@ class ServiceContainer:
         self._projects: Optional[ProjectService] = None
         self._agent_history: Optional[AgentHistoryService] = None
         self._documents: Optional[DocumentService] = None
+        self._document_chat: Optional[DocumentChatService] = None
         self._report_management: Optional[ReportManagementService] = None
         self._storage_service: Optional[StorageService] = None
         self._event_journal: Optional[EventJournal] = None
@@ -237,6 +239,16 @@ class ServiceContainer:
                 max_bytes=self.settings.max_document_bytes,
             )
         return self._documents
+
+    @property
+    def document_chat(self) -> DocumentChatService:
+        if self._document_chat is None:
+            self._document_chat = DocumentChatService(
+                repository=DocumentRepository(self.database),
+                document_service=self.documents,
+                chat_service=self.chat,
+            )
+        return self._document_chat
 
     @property
     def agent_history(self) -> AgentHistoryService:
@@ -516,6 +528,10 @@ def get_agent_history_service(request: Request) -> AgentHistoryService:
 
 def get_document_service(request: Request) -> DocumentService:
     return get_container(request).documents
+
+
+def get_document_chat_service(request: Request) -> DocumentChatService:
+    return get_container(request).document_chat
 
 
 def get_report_management_service(request: Request) -> ReportManagementService:

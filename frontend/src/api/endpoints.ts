@@ -54,6 +54,11 @@ export const API = {
     process: (id: string) => `/documents/${id}/process`,
     status: (id: string) => `/documents/${id}/status`,
     delete: (id: string) => `/documents/${id}`,
+    preview: (id: string) => `/documents/${id}/preview`,
+    chat: (id: string) => `/documents/${id}/chat`,
+    chatMulti: '/documents/chat/multi',
+    conversations: (id: string) => `/documents/${id}/conversations`,
+    conversation: (docId: string, convId: string) => `/documents/${docId}/conversations/${convId}`,
   },
   sources: {
     bySession: (id: string) => `/research/${id}/sources`,

@@ -122,6 +122,45 @@ export interface DocumentRecord {
   updated_at: UtcDatetime;
 }
 
+export interface DocumentCitation {
+  index: number;
+  document_id: string;
+  filename: string;
+  page_number?: number | string;
+  section?: string;
+  text?: string;
+  snippet?: string;
+}
+
+export interface DocumentChatMessage {
+  message_id: string;
+  conversation_id?: string;
+  role: 'user' | 'assistant';
+  content: string;
+  citations?: DocumentCitation[];
+  created_at: UtcDatetime;
+}
+
+export interface DocumentConversation {
+  conversation_id: string;
+  document_id: string;
+  title: string;
+  created_at: UtcDatetime;
+  updated_at: UtcDatetime;
+}
+
+export interface DocumentPreview {
+  document_id: string;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  chunk_count: number;
+  processing_status: string;
+  total_pages: number;
+  pages: Array<{ page_number: number; text: string; char_count: number }>;
+  preview_text: string;
+}
+
 export interface ContradictionRecord {
   contradiction_id: string;
   session_id: string;

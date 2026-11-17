@@ -114,25 +114,30 @@ class ResearchMemoryStore:
         chroma_database = self._settings.chroma_database
 
         if chroma_api_key and chroma_tenant and chroma_database:
-            import chromadb  # type: ignore
+            try:
+                import chromadb  # type: ignore
 
-            chroma_client = chromadb.CloudClient(
-                tenant=chroma_tenant,
-                database=chroma_database,
-                api_key=chroma_api_key,
-            )
-            return Chroma(
-                client=chroma_client,
-                collection_name=collection_name,
-                embedding_function=self._embeddings,
-            )
-        else:
-            Path(self._settings.chroma_dir).mkdir(parents=True, exist_ok=True)
-            return Chroma(
-                collection_name=collection_name,
-                embedding_function=self._embeddings,
-                persist_directory=str(self._settings.chroma_dir),
-            )
+                chroma_client = chromadb.CloudClient(
+                    tenant=chroma_tenant,
+                    database=chroma_database,
+                    api_key=chroma_api_key,
+                )
+                return Chroma(
+                    client=chroma_client,
+                    collection_name=collection_name,
+                    embedding_function=self._embeddings,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"Chroma CloudClient connection failed: {exc}. Falling back to local Chroma storage."
+                )
+
+        Path(self._settings.chroma_dir).mkdir(parents=True, exist_ok=True)
+        return Chroma(
+            collection_name=collection_name,
+            embedding_function=self._embeddings,
+            persist_directory=str(self._settings.chroma_dir),
+        )
 
     def _get_vectorstore(self):
         """Lazy-initialise the ChromaDB LangChain vectorstore for this scope."""
@@ -240,7 +245,7 @@ class ResearchMemoryStore:
         *,
         document_id: str,
         filename: str,
-        chunks: List[str],
+        chunks: List[Any],
         project_id: Optional[str] = None,
         source_label: Optional[str] = None,
     ) -> int:
@@ -251,12 +256,24 @@ class ResearchMemoryStore:
         created_at = _utcnow_iso()
         ids: List[str] = []
         encrypted_docs: List[str] = []
+        texts_to_embed: List[str] = []
         metadatas: List[Dict[str, Any]] = []
 
-        for idx, chunk in enumerate(chunks):
+        for idx, item in enumerate(chunks):
+            if isinstance(item, dict):
+                chunk_text = str(item.get("text", "")).strip()
+                page_num = item.get("page_number")
+                sec = item.get("section", "")
+            else:
+                chunk_text = str(item).strip()
+                page_num = None
+                sec = ""
+            if not chunk_text:
+                continue
             chunk_id = f"doc-{document_id}-chk-{idx}"
             ids.append(chunk_id)
-            encrypted_docs.append(encrypt_text(chunk))
+            texts_to_embed.append(chunk_text)
+            encrypted_docs.append(encrypt_text(chunk_text))
             meta = {
                 "user_id": self._user_id,
                 "document_id": document_id,
@@ -269,11 +286,18 @@ class ResearchMemoryStore:
                 "verification_status": "verified",
                 "created_at": created_at,
             }
+            if page_num is not None:
+                meta["page_number"] = str(page_num)
+            if sec:
+                meta["section"] = str(sec)
             if proj_id:
                 meta["project_id"] = proj_id
             metadatas.append(meta)
 
-        embeddings = self._embeddings.embed_documents(chunks)
+        if not texts_to_embed:
+            return 0
+
+        embeddings = self._embeddings.embed_documents(texts_to_embed)
 
         vs = self._get_vectorstore()
         vs._collection.upsert(
@@ -290,7 +314,7 @@ class ResearchMemoryStore:
                 embeddings=embeddings,
                 metadatas=metadatas,
             )
-        return len(chunks)
+        return len(texts_to_embed)
 
     def delete_document_chunks(self, *, document_id: str) -> int:
         """Purge all chunks associated with a deleted document."""
@@ -418,6 +442,8 @@ class ResearchMemoryStore:
         verification_status: Optional[str] = None,
         project_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        document_id: Optional[str] = None,
+        document_ids: Optional[List[str]] = None,
         include_unverified: bool = True,
     ) -> List[Dict[str, Any]]:
         """
@@ -439,6 +465,8 @@ class ResearchMemoryStore:
             filter_meta["session_id"] = {"$eq": active_sess}
         if content_type:
             filter_meta["content_type"] = {"$eq": content_type}
+        if document_id:
+            filter_meta["document_id"] = {"$eq": document_id}
 
         try:
             docs = target_vs.similarity_search(query, k=max(k * 2, 10), filter=filter_meta)
@@ -446,6 +474,7 @@ class ResearchMemoryStore:
             logger.warning("memory.search_filter_failed", extra={"error": str(exc)})
             docs = target_vs.similarity_search(query, k=max(k * 2, 10))
 
+        allowed_doc_ids = set(document_ids) if document_ids else None
         results: List[Dict[str, Any]] = []
         for d in docs:
             meta = d.metadata or {}
@@ -457,6 +486,10 @@ class ResearchMemoryStore:
             if active_sess and meta.get("session_id") != active_sess:
                 continue
             if content_type and meta.get("content_type") != content_type:
+                continue
+            if document_id and meta.get("document_id") != document_id:
+                continue
+            if allowed_doc_ids and meta.get("document_id") not in allowed_doc_ids:
                 continue
 
             # Filter by source_type (all / document / research)

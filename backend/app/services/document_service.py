@@ -246,13 +246,18 @@ class DocumentService:
             extra={"document_id": row["document_id"], "size_bytes": row["size_bytes"]},
         )
 
-        # Automatically process and index the uploaded document into ChromaDB
+        # Automatically process and index the uploaded document in the background
         try:
-            processed_row = self.process_document(row["document_id"], owner)
-            return processed_row
+            import threading
+            threading.Thread(
+                target=self.process_document,
+                args=(row["document_id"], owner),
+                daemon=True,
+            ).start()
         except Exception as exc:
-            logger.warning(f"Background document indexing deferred: {exc}")
-            return row
+            logger.warning(f"Background document indexing dispatch deferred: {exc}")
+
+        return row
 
     # ── Read ──────────────────────────────────────────────────────────────
 
@@ -307,59 +312,25 @@ class DocumentService:
 
     def process_document(self, document_id: str, owner_id: str) -> Dict[str, Any]:
         """Extract text, chunk, and index into ChromaDB. Updates processing status."""
-        data, row = self.download(document_id, owner_id)
+        try:
+            data, row = self.download(document_id, owner_id)
+        except NotFoundError:
+            return {}
+        except Exception as exc:
+            self._repository.update_status(
+                document_id, owner_id, status="failed", error_message=f"File download failed: {exc}"
+            )
+            try:
+                return self.get_document(document_id, owner_id)
+            except NotFoundError:
+                return {}
+
         filename = row.get("original_filename", "")
         ext = Path(filename).suffix.lower()
 
         text = ""
-        try:
-            if ext in {".txt", ".md"}:
-                text = data.decode("utf-8-sig", errors="replace")
-            elif ext == ".docx":
-                try:
-                    import docx
-                    doc = docx.Document(io.BytesIO(data))
-                    text = "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
-                except Exception:
-                    import zipfile, xml.etree.ElementTree as ET
-                    with zipfile.ZipFile(io.BytesIO(data)) as z:
-                        xml_content = z.read("word/document.xml")
-                        root = ET.fromstring(xml_content)
-                        text = " ".join(node.text for node in root.iter() if node.text)
-            elif ext == ".pdf":
-                try:
-                    import pypdf
-                    reader = pypdf.PdfReader(io.BytesIO(data))
-                    pages = [page.extract_text() or "" for page in reader.pages]
-                    text = "\n\n".join(p.strip() for p in pages if p.strip())
-                except Exception:
-                    pass
-                if not text:
-                    import re, zlib
-                    parts = []
-                    for m in re.finditer(rb"stream[\r\n]+(.*?)[\r\n]+endstream", data, re.DOTALL):
-                        raw = m.group(1)
-                        try:
-                            decomp = zlib.decompress(raw)
-                        except Exception:
-                            decomp = raw
-                        txt_parts = re.findall(rb"\((.*?)\)Tj", decomp)
-                        if txt_parts:
-                            parts.append(" ".join(p.decode("latin1", errors="replace") for p in txt_parts))
-                    text = "\n\n".join(parts)
-        except Exception as exc:
-            self._repository.update_status(
-                document_id, owner_id, status="failed", error_message=f"Text extraction failed: {exc}"
-            )
-            return self.get_document(document_id, owner_id)
+        chunk_items: List[Dict[str, Any]] = []
 
-        if not text.strip():
-            self._repository.update_status(
-                document_id, owner_id, status="failed", error_message="No extractable text found in file."
-            )
-            return self.get_document(document_id, owner_id)
-
-        # Chunk and index into persistent encrypted ChromaDB vector store
         try:
             import re
             import sys
@@ -368,14 +339,94 @@ class DocumentService:
             if root_dir not in sys.path:
                 sys.path.insert(0, root_dir)
             from knowledge_base import _chunk_text
+
+            if ext in {".txt", ".md"}:
+                text = data.decode("utf-8-sig", errors="replace")
+                cleaned = re.sub(r"\r\n|\r", "\n", text).strip()
+                chunks = _chunk_text(cleaned, chunk_size=1000, overlap=150)
+                for chk in chunks:
+                    chunk_items.append({"text": chk, "page_number": 1, "section": "Document Text"})
+            elif ext == ".docx":
+                try:
+                    import docx
+                    doc = docx.Document(io.BytesIO(data))
+                    paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+                    text = "\n\n".join(paras)
+                    chunks = _chunk_text(text, chunk_size=1000, overlap=150)
+                    for chk in chunks:
+                        chunk_items.append({"text": chk, "page_number": 1, "section": "Word Document"})
+                except Exception:
+                    import zipfile, xml.etree.ElementTree as ET
+                    with zipfile.ZipFile(io.BytesIO(data)) as z:
+                        xml_content = z.read("word/document.xml")
+                        root = ET.fromstring(xml_content)
+                        text = " ".join(node.text for node in root.iter() if node.text)
+                    chunks = _chunk_text(text, chunk_size=1000, overlap=150)
+                    for chk in chunks:
+                        chunk_items.append({"text": chk, "page_number": 1, "section": "Word Document"})
+            elif ext == ".pdf":
+                try:
+                    import pypdf
+                    reader = pypdf.PdfReader(io.BytesIO(data))
+                    all_pages = []
+                    for p_idx, page in enumerate(reader.pages):
+                        ptxt = page.extract_text() or ""
+                        ptxt = re.sub(r"[ \t]+", " ", ptxt).strip()
+                        if ptxt:
+                            all_pages.append(ptxt)
+                            p_chunks = _chunk_text(ptxt, chunk_size=800, overlap=120)
+                            for chk in p_chunks:
+                                chunk_items.append({
+                                    "text": chk,
+                                    "page_number": p_idx + 1,
+                                    "section": f"Page {p_idx + 1}",
+                                })
+                    text = "\n\n".join(all_pages)
+                except Exception as exc:
+                    logger.warning(f"pypdf extraction error: {exc}")
+
+                if not text:
+                    import re as regx, zlib
+                    parts = []
+                    for m in regx.finditer(rb"stream[\r\n]+(.*?)[\r\n]+endstream", data, regx.DOTALL):
+                        raw = m.group(1)
+                        try:
+                            decomp = zlib.decompress(raw)
+                        except Exception:
+                            decomp = raw
+                        txt_parts = regx.findall(rb"\((.*?)\)Tj", decomp)
+                        if txt_parts:
+                            parts.append(" ".join(p.decode("latin1", errors="replace") for p in txt_parts))
+                    text = "\n\n".join(parts)
+                    chunks = _chunk_text(text, chunk_size=1000, overlap=150)
+                    for chk in chunks:
+                        chunk_items.append({"text": chk, "page_number": 1, "section": "PDF Stream"})
+        except Exception as exc:
+            self._repository.update_status(
+                document_id, owner_id, status="failed", error_message=f"Text extraction failed: {exc}"
+            )
+            try:
+                return self.get_document(document_id, owner_id)
+            except NotFoundError:
+                return {}
+
+        if not text.strip() and not chunk_items:
+            self._repository.update_status(
+                document_id, owner_id, status="failed", error_message="No extractable text found in file."
+            )
+            try:
+                return self.get_document(document_id, owner_id)
+            except NotFoundError:
+                return {}
+
+        # Chunk and index into persistent encrypted ChromaDB vector store
+        try:
             from app.services.research_memory_store import ResearchMemoryStore
 
-            # Clean and normalize text
-            cleaned_text = re.sub(r"\r\n|\r", "\n", text)
-            cleaned_text = re.sub(r"\n{3,}", "\n\n", cleaned_text).strip()
-            chunks = _chunk_text(cleaned_text, chunk_size=1000, overlap=200)
-            if not chunks:
-                chunks = [cleaned_text[:2000]]
+            if not chunk_items:
+                cleaned_text = re.sub(r"\r\n|\r", "\n", text).strip()
+                chunks = _chunk_text(cleaned_text, chunk_size=1000, overlap=200)
+                chunk_items = [{"text": c, "page_number": 1, "section": "Document Body"} for c in chunks]
 
             store = ResearchMemoryStore(
                 user_id=owner_id,
@@ -384,7 +435,7 @@ class DocumentService:
             indexed_count = store.add_document_chunks(
                 document_id=document_id,
                 filename=filename,
-                chunks=chunks,
+                chunks=chunk_items,
                 project_id=row.get("project_id"),
             )
             self._repository.update_status(document_id, owner_id, status="indexed")
@@ -393,11 +444,69 @@ class DocumentService:
             logger.warning(f"ChromaDB indexing warning: {exc}")
             self._repository.update_status(document_id, owner_id, status="indexed")
             try:
-                self._repository.update_chunk_count(document_id, owner_id, len(chunks) if 'chunks' in locals() else 1)
+                self._repository.update_chunk_count(document_id, owner_id, len(chunk_items) or 1)
             except Exception:
                 pass
 
-        return self.get_document(document_id, owner_id)
+        try:
+            return self.get_document(document_id, owner_id)
+        except NotFoundError:
+            return {}
+
+    def get_document_preview(self, document_id: str, owner_id: str) -> Dict[str, Any]:
+        """Return structured preview of document text and pages for the Document Viewer panel."""
+        data, row = self.download(document_id, owner_id)
+        filename = row.get("original_filename", "")
+        ext = Path(filename).suffix.lower()
+
+        pages: List[Dict[str, Any]] = []
+        full_text = ""
+
+        try:
+            import re
+            if ext in {".txt", ".md"}:
+                text = data.decode("utf-8-sig", errors="replace")
+                full_text = text
+                pages.append({"page_number": 1, "text": text[:30000], "char_count": len(text)})
+            elif ext == ".docx":
+                try:
+                    import docx
+                    doc = docx.Document(io.BytesIO(data))
+                    paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+                    full_text = "\n\n".join(paras)
+                    pages.append({"page_number": 1, "text": full_text[:30000], "char_count": len(full_text)})
+                except Exception:
+                    full_text = data.decode("utf-8", errors="replace")
+                    pages.append({"page_number": 1, "text": full_text[:30000], "char_count": len(full_text)})
+            elif ext == ".pdf":
+                try:
+                    import pypdf
+                    reader = pypdf.PdfReader(io.BytesIO(data))
+                    for p_idx, page in enumerate(reader.pages):
+                        ptxt = (page.extract_text() or "").strip()
+                        ptxt = re.sub(r"[ \t]+", " ", ptxt)
+                        pages.append({
+                            "page_number": p_idx + 1,
+                            "text": ptxt[:10000],
+                            "char_count": len(ptxt),
+                        })
+                    full_text = "\n\n".join(p["text"] for p in pages if p["text"])
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.warning(f"Document preview extraction error: {exc}")
+
+        return {
+            "document_id": document_id,
+            "original_filename": filename,
+            "mime_type": row.get("mime_type", ""),
+            "size_bytes": row.get("size_bytes", 0),
+            "chunk_count": row.get("chunk_count", 0),
+            "processing_status": row.get("processing_status", "uploaded"),
+            "total_pages": len(pages) if pages else 1,
+            "pages": pages,
+            "preview_text": full_text[:20000],
+        }
 
     def status(self, document_id: str, owner_id: str) -> Dict[str, Any]:
         return self.get_document(document_id, owner_id)
