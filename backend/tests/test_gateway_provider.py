@@ -216,7 +216,7 @@ class TestGatewaySettings:
     def test_model_defaults_to_the_provider_model(self):
         settings = _settings(LLM_PROVIDER="gemini", GEMINI_API_KEY="test")
 
-        assert settings.gateway_model_name == "gemini/gemini-3.8-flash"
+        assert settings.gateway_model_name == f"gemini/{settings.gemini_model}"
         assert settings.gateway_ready is False  # not enabled yet
 
     def test_llm_provider_gateway_enables_the_gateway(self):

@@ -190,7 +190,7 @@ class Settings:
     mistral_api_key: str = field(default="", repr=False)
     hf_token: str = field(default="", repr=False)
     groq_model: str = "openai/gpt-oss-120b"
-    gemini_model: str = "gemini-3.8-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
     mistral_model: str = "mistral-small-latest"
     hf_model: str = "mistral"
 
@@ -266,7 +266,12 @@ class Settings:
             source, "GATEWAY_ENABLED", default=raw_provider == "gateway"
         )
         if raw_provider == "gateway":
-            raw_provider = "gemini"
+            if _get(source, "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+                raw_provider = "gemini"
+            elif _get(source, "GROQ_API_KEY"):
+                raw_provider = "groq"
+            else:
+                raw_provider = "gemini"
         elif raw_provider not in PROVIDER_ORDER:
             raw_provider = "gemini"
 
@@ -329,7 +334,7 @@ class Settings:
             mistral_api_key=_get(source, "MISTRAL_API_KEY"),
             hf_token=_get(source, "HF_TOKEN", "HUGGINGFACEHUB_API_TOKEN"),
             groq_model=_get(source, "GROQ_MODEL", default="openai/gpt-oss-120b"),
-            gemini_model=_get(source, "GEMINI_MODEL", default="gemini-3.8-flash"),
+            gemini_model=_get(source, "GEMINI_MODEL", default="gemini-3.5-flash-lite"),
             mistral_model=_get(source, "MISTRAL_MODEL", default="mistral-small-latest"),
             hf_model=_get(source, "HF_MODEL", default="mistral"),
             gateway_enabled=gateway_enabled,

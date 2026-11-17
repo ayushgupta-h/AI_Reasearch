@@ -71,36 +71,54 @@ class ChatService:
 
     def _complete_with(self, provider: str, message: str) -> str:
         last_exc = None
-        for attempt in range(2):
-            try:
-                llm = self._build_llm(provider)
-                result = llm.invoke([("system", SYSTEM_PROMPT), ("user", message)])
-                content = result.content
-                if isinstance(content, list):  # some providers return content blocks
-                    content = "\n".join(
-                        (block.get("text") if isinstance(block, dict) and block.get("text") else str(block))
-                        for block in content
+        models_to_try: List[Optional[str]] = [None]
+        if provider == "gemini":
+            models_to_try = [self._settings.gemini_model]
+            if "gemini-3.5-flash-lite" not in models_to_try:
+                models_to_try.append("gemini-3.5-flash-lite")
+
+        for model_cand in models_to_try:
+            for attempt in range(2):
+                try:
+                    try:
+                        llm = self._build_llm(provider, model_override=model_cand)
+                    except TypeError:
+                        llm = self._build_llm(provider)
+                    result = llm.invoke([("system", SYSTEM_PROMPT), ("user", message)])
+                    content = result.content
+                    if isinstance(content, list):  # some providers return content blocks
+                        content = "\n".join(
+                            (block.get("text") if isinstance(block, dict) and block.get("text") else str(block))
+                            for block in content
+                        )
+                    return str(content).strip()
+                except Exception as exc:
+                    last_exc = exc
+                    err_text = str(exc).lower()
+                    is_quota = any(
+                        m in err_text
+                        for m in ("429", "resource_exhausted", "quota")
                     )
-                return str(content).strip()
-            except Exception as exc:
-                last_exc = exc
-                err_text = str(exc).lower()
-                is_transient = any(
-                    m in err_text
-                    for m in (
-                        "504", "503", "502", "429", "deadline", "timeout", "timed out", "temporarily unavailable"
+                    if is_quota:
+                        # Skip retrying this exhausted model and try the next candidate model
+                        break
+                    is_transient = any(
+                        m in err_text
+                        for m in (
+                            "504", "503", "502", "deadline", "timeout", "timed out", "temporarily unavailable"
+                        )
                     )
-                )
-                if is_transient and attempt == 0:
-                    import time
-                    time.sleep(1.5)
-                    continue
-                raise
+                    if is_transient and attempt == 0:
+                        import time
+                        time.sleep(1.5)
+                        continue
+                    break
+
         if last_exc:
             raise last_exc
         return ""
 
-    def _build_llm(self, provider: str):
+    def _build_llm(self, provider: str, model_override: Optional[str] = None):
         if provider == GATEWAY_PROVIDER:
             return GatewayChatModel(
                 model=self._settings.gateway_model_name,
@@ -122,10 +140,10 @@ class ChatService:
             from langchain_google_genai import ChatGoogleGenerativeAI
 
             return ChatGoogleGenerativeAI(
-                model=self._settings.gemini_model,
+                model=model_override or self._settings.gemini_model,
                 google_api_key=self._settings.gemini_api_key,
                 temperature=0.4,
-                max_retries=3,
-                timeout=120,
+                max_retries=2,
+                timeout=60,
             )
         raise ValueError(f"Unsupported provider: {provider}")

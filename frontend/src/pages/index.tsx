@@ -1502,13 +1502,7 @@ function SessionView({ sessionId }: { sessionId: string }) {
   const displayTitle = session?.title ?? session?.query ?? session?.topic ?? pendingQuery ?? 'Research Investigation';
   const displayStatus = done ? 'completed' : (status === 'streaming' || status === 'connecting' ? 'in_progress' : session?.status ?? 'running');
 
-  const messages = useMemo<Msg[]>(() => {
-    const list: Msg[] = [];
-    const queryText = session?.query || session?.topic || pendingQuery;
-    if (queryText) list.push({ id: 'q0', role: 'user', content: queryText });
-    list.push(...followUps);
-    return list;
-  }, [session?.query, session?.topic, pendingQuery, followUps]);
+  const initialQuery = session?.query || session?.topic || pendingQuery;
 
   const sendFollowUp = async ({ query }: { query: string }) => {
     setFollowUps((f) => [...f, { id: `u${Date.now()}`, role: 'user', content: query }]);
@@ -1526,6 +1520,12 @@ function SessionView({ sessionId }: { sessionId: string }) {
     } finally { setChatBusy(false); }
   };
 
+  useEffect(() => {
+    if (followUps.length > 0 || chatBusy) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    }
+  }, [followUps.length, chatBusy]);
+
   if (isLoading && !pendingQuery) return <FullPageSpinner />;
   if ((isError || !session) && !pendingQuery) return <EmptyState title="Session not found" hint="This session may not exist or does not belong to your account." />;
 
@@ -1539,14 +1539,13 @@ function SessionView({ sessionId }: { sessionId: string }) {
               <p className="mt-1 text-xs text-[#817463]">Session {sessionId.slice(0, 10)} · Status: <StatusBadge status={displayStatus} /></p>
             </header>
 
-            {messages.map((m) => (
-              <div key={m.id} className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
-                <div className={cn('max-w-[88%] rounded-2xl px-4 py-3',
-                  m.role === 'user' ? 'bg-[#C5A36A] text-[#080806] font-medium' : 'border border-[#453322] bg-[#14110D]')}>
-                  {m.role === 'user' ? <p className="whitespace-pre-wrap">{m.content}</p> : <MessageContent content={m.content} />}
+            {initialQuery && (
+              <div className="flex justify-end">
+                <div className="max-w-[88%] rounded-2xl px-4 py-3 bg-[#C5A36A] text-[#080806] font-medium shadow-sm">
+                  <p className="whitespace-pre-wrap">{initialQuery}</p>
                 </div>
               </div>
-            ))}
+            )}
 
             {(isActive || status === 'connecting' || status === 'streaming') && (
               <ProgressTimeline stages={stages} status={status} error={streamError} onRetry={restart} startedAt={startedAtRef.current} />
@@ -1599,6 +1598,31 @@ function SessionView({ sessionId }: { sessionId: string }) {
                 ) : (
                   <div className="rounded-2xl border border-[#453322] bg-[#14110D] p-6 text-center text-sm text-[#817463]">
                     Report generated. Click <strong className="text-[#C5A36A]">Fullscreen Editor</strong> or export above to view.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Follow-up conversation queries & answers render BELOW the report */}
+            {followUps.length > 0 && (
+              <div className="space-y-4 pt-6 border-t border-[#302319]">
+                <div className="flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-[#C5A36A]">
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  <span>Follow-up Discussion</span>
+                </div>
+                {followUps.map((m) => (
+                  <div key={m.id} className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
+                    <div className={cn('max-w-[88%] rounded-2xl px-4 py-3',
+                      m.role === 'user' ? 'bg-[#C5A36A] text-[#080806] font-medium' : 'border border-[#453322] bg-[#14110D]')}>
+                      {m.role === 'user' ? <p className="whitespace-pre-wrap">{m.content}</p> : <MessageContent content={m.content} />}
+                    </div>
+                  </div>
+                ))}
+                {chatBusy && (
+                  <div className="flex justify-start">
+                    <div className="flex items-center gap-2 rounded-2xl border border-[#453322] bg-[#14110D] px-4 py-3 text-sm text-[#C5A36A]">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Analyzing investigation findings…
+                    </div>
                   </div>
                 )}
               </div>

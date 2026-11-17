@@ -444,34 +444,47 @@ Provide a comprehensive comparative analysis with clear markdown tables and brac
         """Invoke LLM chain with custom system prompt and return (reply, provider)."""
         errors = []
         for provider in self._chat_service.provider_chain():
-            for attempt in range(2):
-                try:
-                    llm = self._chat_service._build_llm(provider)
-                    res = llm.invoke([("system", system_prompt), ("user", user_prompt)])
-                    content = res.content
-                    if isinstance(content, list):
-                        content = "\n".join(
-                            (b.get("text") if isinstance(b, dict) and b.get("text") else str(b))
-                            for b in content
+            models_to_try: List[Optional[str]] = [None]
+            if provider == "gemini":
+                models_to_try = [self._settings.gemini_model]
+                if "gemini-3.5-flash-lite" not in models_to_try:
+                    models_to_try.append("gemini-3.5-flash-lite")
+
+            for model_cand in models_to_try:
+                for attempt in range(2):
+                    try:
+                        llm = self._chat_service._build_llm(provider, model_override=model_cand)
+                        res = llm.invoke([("system", system_prompt), ("user", user_prompt)])
+                        content = res.content
+                        if isinstance(content, list):
+                            content = "\n".join(
+                                (b.get("text") if isinstance(b, dict) and b.get("text") else str(b))
+                                for b in content
+                            )
+                        reply = str(content).strip()
+                        if reply:
+                            return reply, provider
+                    except Exception as exc:
+                        err_msg = str(exc).lower()
+                        is_quota = any(
+                            m in err_msg
+                            for m in ("429", "resource_exhausted", "quota")
                         )
-                    reply = str(content).strip()
-                    if reply:
-                        return reply, provider
-                except Exception as exc:
-                    err_msg = str(exc).lower()
-                    is_transient = any(
-                        m in err_msg
-                        for m in (
-                            "504", "503", "502", "429", "deadline", "timeout", "timed out", "temporarily unavailable"
+                        if is_quota:
+                            break
+                        is_transient = any(
+                            m in err_msg
+                            for m in (
+                                "504", "503", "502", "deadline", "timeout", "timed out", "temporarily unavailable"
+                            )
                         )
-                    )
-                    if is_transient and attempt == 0:
-                        import time
-                        time.sleep(2.0)
-                        continue
-                    logger.warning(f"document_chat.provider_failed: {provider} - {exc}")
-                    errors.append(f"{provider}: {redact(exc)[:100]}")
-                    break
+                        if is_transient and attempt == 0:
+                            import time
+                            time.sleep(2.0)
+                            continue
+                        logger.warning(f"document_chat.provider_failed: {provider} - {exc}")
+                        errors.append(f"{provider}: {redact(exc)[:100]}")
+                        break
 
         if passages:
             return self._extractive_fallback(passages, user_prompt)
