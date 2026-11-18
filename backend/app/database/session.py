@@ -61,6 +61,7 @@ def build_engine(url: str, *, pool_size: int = 5, max_overflow: int = 10) -> Eng
         max_overflow=max_overflow,
         pool_recycle=1800,
         echo=False,
+        connect_args={"connect_timeout": 5},
     )
 
 

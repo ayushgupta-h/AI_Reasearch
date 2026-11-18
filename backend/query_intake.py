@@ -223,9 +223,9 @@ class QueryIntakeSystem:
         ]
         try:
             result = self.decomposition_chain.invoke({"query": query})
+            if not isinstance(result, dict):
+                raise ValueError("Decomposition result is not a dict")
             return ResearchRequest(**result)
-        except ValidationError:
-            raise
         except Exception as exc:
             logger.warning("Intake decomposition chain failed (%s); using heuristic decomposition", exc)
             return ResearchRequest(

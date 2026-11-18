@@ -413,56 +413,80 @@ class PostgresCheckpointer(BaseCheckpointSaver):
             return iter(())
 
         self.ensure_schema()
-        engine = self._get_engine()
-        sql = _LIST_SQL
-        params: list[Any] = [owner_id]
+        if not self._pg_disabled:
+            try:
+                engine = self._get_engine()
+                sql = _LIST_SQL
+                params: list[Any] = [owner_id]
 
-        if thread_id:
-            sql += " AND thread_id = %s"
-            params.append(thread_id)
+                if thread_id:
+                    sql += " AND thread_id = %s"
+                    params.append(thread_id)
 
-        sql += " ORDER BY created_at DESC"
-        if limit is not None:
-            sql += " LIMIT %s"
-            params.append(limit)
+                sql += " ORDER BY created_at DESC"
+                if limit is not None:
+                    sql += " LIMIT %s"
+                    params.append(limit)
 
-        with engine.connect() as connection:
-            rows = _exec_sql(connection, sql, tuple(params)).fetchall()
+                with engine.connect() as connection:
+                    rows = _exec_sql(connection, sql, tuple(params)).fetchall()
 
-        for row in rows:
-            yield CheckpointTuple(
-                config={
-                    "configurable": {
-                        "thread_id": row[0],
-                        "checkpoint_ns": row[1],
-                        "checkpoint_id": row[2],
-                    }
-                },
-                checkpoint=self._deserialise_checkpoint(row[5]),
-                metadata=self._deserialise_metadata(row[6]),
-                parent_config=(
-                    {
-                        "configurable": {
-                            "thread_id": row[0],
-                            "checkpoint_ns": row[1],
-                            "checkpoint_id": row[3],
-                        }
-                    }
-                    if row[3]
-                    else None
-                ),
-                pending_writes=None,
-            )
+                for row in rows:
+                    yield CheckpointTuple(
+                        config={
+                            "configurable": {
+                                "thread_id": row[0],
+                                "checkpoint_ns": row[1],
+                                "checkpoint_id": row[2],
+                            }
+                        },
+                        checkpoint=self._deserialise_checkpoint(row[5]),
+                        metadata=self._deserialise_metadata(row[6]),
+                        parent_config=(
+                            {
+                                "configurable": {
+                                    "thread_id": row[0],
+                                    "checkpoint_ns": row[1],
+                                    "checkpoint_id": row[3],
+                                }
+                            }
+                            if row[3]
+                            else None
+                        ),
+                        pending_writes=None,
+                    )
+                return
+            except Exception as exc:
+                logger.warning("postgres_checkpointer.list_failed_using_memory: %s", exc)
+                self._pg_disabled = True
+
+        # Fallback to in-memory items
+        matches = [
+            v for k, v in self._memory_store.items()
+            if (not thread_id or k[0] == thread_id)
+        ]
+        for m in reversed(matches[:limit] if limit else matches):
+            yield m
 
     # ── Convenience ─────────────────────────────────────────────────────
 
     def delete_thread(self, thread_id: str, owner_id: str) -> None:
         """Delete all checkpoints for a thread (owner-scoped)."""
-        self.ensure_schema()
-        engine = self._get_engine()
-        with engine.connect() as connection:
-            _exec_sql(connection, _DELETE_THREAD_SQL, (thread_id, owner_id))
-            connection.commit()
+        # Clear in-memory
+        to_del = [k for k in self._memory_store if k[0] == thread_id]
+        for k in to_del:
+            self._memory_store.pop(k, None)
+
+        if not self._pg_disabled:
+            try:
+                self.ensure_schema()
+                engine = self._get_engine()
+                with engine.connect() as connection:
+                    _exec_sql(connection, _DELETE_THREAD_SQL, (thread_id, owner_id))
+                    connection.commit()
+            except Exception as exc:
+                logger.warning("postgres_checkpointer.delete_thread_failed: %s", exc)
+                self._pg_disabled = True
 
 
 __all__ = ["PostgresCheckpointer"]

@@ -1776,6 +1776,7 @@ class MultiAgentOrchestrator:
                 "status": state.get("status", "running"),
             }
 
+        memories = memories or []
         memories_state = [
             {
                 "id": m.id,

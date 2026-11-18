@@ -1,0 +1,5 @@
+Method,Name,Error,Occurrences,First Seen,Last Seen
+GET,[Projects] List,HTTPError('401 Client Error: Unauthorized for url: [Projects] List'),3,2026-11-18T13:23:16Z,2026-11-18T13:23:17Z
+POST,[Documents] Upload,HTTPError('401 Client Error: Unauthorized for url: [Documents] Upload'),2,2026-11-18T13:23:16Z,2026-11-18T13:23:16Z
+POST,[Projects] Create,HTTPError('401 Client Error: Unauthorized for url: [Projects] Create'),4,2026-11-18T13:23:16Z,2026-11-18T13:23:22Z
+GET,[Auth] Me,HTTPError('401 Client Error: Unauthorized for url: [Auth] Me'),1,2026-11-18T13:23:17Z,2026-11-18T13:23:17Z
