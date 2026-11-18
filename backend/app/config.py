@@ -86,21 +86,30 @@ def resolve_data_root() -> Path:
     """Resolve the root directory for persistent state.
     
     Checks in priority order:
-    1. PERSISTENT_DATA_DIR environment variable (Render persistent disk or custom mount)
-    2. /var/data directory (standard Render persistent disk mount point)
-    3. BASE_DIR (local backend directory fallback for development)
+    1. PERSISTENT_DATA_DIR environment variable (only if writable)
+    2. /var/data directory (standard Render persistent disk mount point, only if writable)
+    3. BASE_DIR (local backend directory fallback for development/ephemeral container)
     """
     env_dir = os.environ.get("PERSISTENT_DATA_DIR", "").strip()
     if env_dir:
         p = Path(env_dir).expanduser()
         try:
             p.mkdir(parents=True, exist_ok=True)
+            test_file = p / ".perm_check"
+            test_file.touch()
+            test_file.unlink()
             return p
         except Exception:
             pass
     var_data = Path("/var/data")
     if var_data.exists() and var_data.is_dir():
-        return var_data
+        try:
+            test_file = var_data / ".perm_check"
+            test_file.touch()
+            test_file.unlink()
+            return var_data
+        except Exception:
+            pass
     return BASE_DIR
 
 
@@ -552,7 +561,10 @@ class Settings:
 
     def ensure_directories(self) -> None:
         for path in (self.reports_dir, self.exports_dir, self.chroma_dir, self.sessions_db_path.parent):
-            path.mkdir(parents=True, exist_ok=True)
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
 
 
 @lru_cache(maxsize=1)
