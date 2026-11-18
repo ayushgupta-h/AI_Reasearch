@@ -597,12 +597,17 @@ class SearchOrchestrator:
         Returns:
             De-duplicated list of SearchResult objects, ordered by source then query.
         """
+        # Ensure queries is a valid non-empty list of strings
+        clean_queries = [q for q in (queries or []) if q and isinstance(q, str) and q.strip()]
+        if not clean_queries:
+            clean_queries = ["general research"]
+
         sources = self.select_sources(source_types)
         loop = asyncio.get_event_loop()
 
         console.print(
-            f"  [cyan]⚡ Async parallel search: {len(queries)} sub-queries × "
-            f"{len(sources)} sources = {len(queries) * len(sources)} concurrent tasks[/cyan]"
+            f"  [cyan]⚡ Async parallel search: {len(clean_queries)} sub-queries × "
+            f"{len(sources)} sources = {len(clean_queries) * len(sources)} concurrent tasks[/cyan]"
         )
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -610,7 +615,7 @@ class SearchOrchestrator:
                 self._async_search_source(
                     executor, loop, src_name, src, query, max_results_per_source
                 )
-                for query in queries
+                for query in clean_queries
                 for src_name, src in sources.items()
             ]
             results_nested: list[list[SearchResult]] = await asyncio.gather(*tasks)

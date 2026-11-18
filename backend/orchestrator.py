@@ -579,8 +579,19 @@ class MultiAgentOrchestrator:
         if not req_data:
             return {"status": "failed_no_request"}
 
-        sub_queries = req_data.get("sub_queries", [state["topic"]])
-        suggested_sources = req_data.get("suggested_source_types", ["academic", "web", "news"])
+        sub_queries = [
+            q for q in (req_data.get("sub_queries") or [state.get("topic") or "research"])
+            if q and isinstance(q, str) and q.strip()
+        ]
+        if not sub_queries:
+            sub_queries = [state.get("topic") or "research"]
+
+        suggested_sources = [
+            s for s in (req_data.get("suggested_source_types") or ["academic", "web", "news"])
+            if s and isinstance(s, str) and s.strip()
+        ]
+        if not suggested_sources:
+            suggested_sources = ["academic", "web", "news"]
 
         console.print(Panel(
             f"[bold white]🌐 AGENT 2: MULTI-SOURCE SEARCH ENGINE[/bold white]\n"
