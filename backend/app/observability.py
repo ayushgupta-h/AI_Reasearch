@@ -20,6 +20,7 @@ import json
 import logging
 import re
 import sys
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -327,3 +328,41 @@ def configure_logging(
 
 def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
+
+
+# ── In-Memory System Event Ring Buffer ───────────────────────────────────────
+
+import collections
+
+_SYSTEM_EVENT_LOCK = threading.Lock()
+_SYSTEM_EVENT_BUFFER: collections.deque = collections.deque(maxlen=100)
+
+
+def record_system_event(
+    category: str,
+    severity: str,
+    component: str,
+    message: str,
+    event_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Record an operational audit event for system observability."""
+    from datetime import datetime, timezone
+    clean_msg = redact(str(message))
+    evt = {
+        "id": event_id or uuid.uuid4().hex[:12],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "category": category,
+        "severity": severity.lower() if severity.lower() in ("info", "warning", "error", "critical") else "info",
+        "component": component,
+        "message": clean_msg,
+    }
+    with _SYSTEM_EVENT_LOCK:
+        _SYSTEM_EVENT_BUFFER.appendleft(evt)
+    return evt
+
+
+def get_recent_system_events(limit: int = 50) -> list[dict[str, Any]]:
+    """Retrieve the most recent operational events."""
+    with _SYSTEM_EVENT_LOCK:
+        return list(_SYSTEM_EVENT_BUFFER)[:limit]
+

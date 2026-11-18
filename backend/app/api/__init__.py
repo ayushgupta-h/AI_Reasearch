@@ -11,6 +11,7 @@ from app.api import (
     completeness,
     documents,
     memory,
+    monitoring,
     notifications,
     projects,
     report_comparison,
@@ -46,5 +47,6 @@ api_router.include_router(sources.router)
 api_router.include_router(completeness.router)
 api_router.include_router(notifications.router)
 api_router.include_router(usage.router)
+api_router.include_router(monitoring.router)
 
 __all__ = ["api_router"]

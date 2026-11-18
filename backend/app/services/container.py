@@ -165,6 +165,7 @@ class ServiceContainer:
         self._report_generator: Optional[ReportGenerationService] = None
         self._usage: Optional[UsageService] = None
         self._health: Optional[HealthService] = None
+        self._monitoring: Optional[Any] = None
 
         # Injected ports take precedence over the lazy local defaults.
         self._cache: Optional[CacheService] = cache
@@ -457,6 +458,13 @@ class ServiceContainer:
         return self._usage
 
     @property
+    def monitoring(self) -> Any:
+        if self._monitoring is None:
+            from app.services.monitoring_service import MonitoringService
+            self._monitoring = MonitoringService(self.settings)
+        return self._monitoring
+
+    @property
     def health(self) -> HealthService:
         if self._health is None:
             self._health = HealthService(
@@ -596,6 +604,10 @@ def get_memory_service(request: Request) -> ResearchMemoryService:
 
 def get_report_comparison_service(request: Request) -> ReportComparisonService:
     return get_container(request).report_comparison
+
+
+def get_monitoring_service(request: Request) -> Any:
+    return get_container(request).monitoring
 
 
 

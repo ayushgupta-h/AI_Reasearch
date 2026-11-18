@@ -24,7 +24,7 @@ import {
   RefreshCw, Search, Send, Settings, ShieldCheck, Sun, Trash2, X, UploadCloud,
   CheckCircle2, XCircle, ArrowUpRight, DollarSign, Cpu, Eye, Download, Filter, Clock, Sparkles,
   ArrowLeft, MessageSquare, Copy, ChevronLeft, BookOpen, Layers, Bot,
-  ChevronDown, ChevronUp, Scale, ArrowRight
+  ChevronDown, ChevronUp, Scale, ArrowRight, Database, Server, HardDrive, Gauge, Terminal, Radio, Zap, Globe
 } from 'lucide-react';
 
 import { ReportViewer } from '../components/ReportViewer';
@@ -4899,127 +4899,852 @@ export function ContradictionsPage() {
  * ============================================================ */
 
 export function SystemStatusPage() {
-  const { data: health, isLoading: healthLoading } = useQuery<HealthStatus>({
-    queryKey: ['system-health'],
-    queryFn: async () => (await api.get(API.system.health)).data,
+  const [refreshInterval, setRefreshInterval] = useState<number | false>(30000); // 30s default
+  const [activeTab, setActiveTab] = useState<'all' | 'infrastructure' | 'providers' | 'agents' | 'performance' | 'storage' | 'events'>('all');
+  const [eventCategoryFilter, setEventCategoryFilter] = useState<string>('all');
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+
+  const { data: dashboard, isLoading, error, refetch, dataUpdatedAt } = useQuery<DashboardOverviewData>({
+    queryKey: ['system-monitoring-overview'],
+    queryFn: async () => (await api.get(API.monitoring.overview)).data,
+    refetchInterval: refreshInterval,
+    staleTime: 5000,
   });
 
-  const { data: dependencies, isLoading: depsLoading } = useQuery<any>({
-    queryKey: ['system-dependencies'],
-    queryFn: async () => (await api.get(API.system.dependencies)).data,
+  const handleManualRefresh = async () => {
+    setIsManualRefreshing(true);
+    try {
+      await api.get(`${API.monitoring.overview}?refresh=true`);
+      await refetch();
+    } catch (err) {
+      console.warn('Manual refresh error:', err);
+    } finally {
+      setIsManualRefreshing(false);
+    }
+  };
+
+  const overview = dashboard?.overview;
+  const infrastructure = dashboard?.infrastructure || [];
+  const providers = dashboard?.providers || [];
+  const searchSources = dashboard?.search_sources || [];
+  const researchExec = dashboard?.research_execution;
+  const agentStages = dashboard?.agent_stages || [];
+  const apiPerf = dashboard?.api_performance;
+  const llmUsage = dashboard?.llm_usage;
+  const storage = dashboard?.storage;
+  const recentEvents = dashboard?.recent_events || [];
+
+  const filteredEvents = recentEvents.filter((ev) => {
+    if (eventCategoryFilter === 'all') return true;
+    return ev.category.toLowerCase() === eventCategoryFilter.toLowerCase();
   });
 
-  const { data: providers } = useQuery<ProvidersResponse>({
-    queryKey: ['system-providers'],
-    queryFn: async () => (await api.get(API.system.providers)).data,
-  });
+  const getStatusColor = (status?: string) => {
+    switch ((status || '').toLowerCase()) {
+      case 'operational':
+      case 'ok':
+      case 'ready':
+      case 'available':
+      case 'reachable':
+        return {
+          bg: 'bg-emerald-500/10',
+          border: 'border-emerald-500/30',
+          text: 'text-emerald-400',
+          dot: 'bg-emerald-400',
+          label: 'OPERATIONAL',
+        };
+      case 'degraded':
+      case 'partial_outage':
+      case 'warning':
+        return {
+          bg: 'bg-amber-500/10',
+          border: 'border-amber-500/30',
+          text: 'text-amber-400',
+          dot: 'bg-amber-400',
+          label: 'DEGRADED',
+        };
+      case 'unavailable':
+      case 'error':
+      case 'failed':
+      case 'critical':
+        return {
+          bg: 'bg-red-500/10',
+          border: 'border-red-500/30',
+          text: 'text-red-400',
+          dot: 'bg-red-400',
+          label: 'UNAVAILABLE',
+        };
+      case 'not_configured':
+      case 'missing_credentials':
+      case 'not_implemented':
+      case 'missing_key':
+        return {
+          bg: 'bg-[#2A231C]',
+          border: 'border-[#4A3B2C]',
+          text: 'text-[#A89884]',
+          dot: 'bg-[#817463]',
+          label: 'NOT CONFIGURED',
+        };
+      default:
+        return {
+          bg: 'bg-blue-500/10',
+          border: 'border-blue-500/30',
+          text: 'text-blue-400',
+          dot: 'bg-blue-400',
+          label: (status || 'UNKNOWN').toUpperCase(),
+        };
+    }
+  };
 
-  const { data: usage } = useQuery<UsageSummaryResponse>({
-    queryKey: ['system-usage'],
-    queryFn: async () => (await api.get(API.usage.summary)).data,
-  });
-
-  const checks = dependencies?.checks || health?.checks || [];
+  const sysStatus = getStatusColor(overview?.status);
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 space-y-6">
-      <div>
-        <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">System Observability & Status</h1>
-        <p className="text-xs text-[#817463]">Live telemetry, provider fallback availability, OpenTelemetry metrics, and usage tracking.</p>
+    <div className="mx-auto max-w-7xl px-4 py-8 space-y-8 animate-fadeIn">
+      {/* ── TOP HEADER & OVERVIEW BAR ────────────────────────────────────── */}
+      <div className="rounded-2xl border border-[#453322]/80 bg-[#120F0C] p-6 shadow-2xl relative overflow-hidden backdrop-blur-md">
+        <div className="absolute top-0 right-0 w-96 h-96 bg-[#C5A36A]/5 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-[#2C2117]">
+          <div>
+            <div className="flex items-center gap-3">
+              <span className="h-2.5 w-2.5 rounded-full bg-[#E6A23C] animate-pulse" />
+              <span className="font-mono text-xs uppercase tracking-widest text-[#C5A36A]">
+                Research AI Quest · Observability
+              </span>
+            </div>
+            <h1 className="font-serif text-3xl font-semibold text-[#F4EBDD] mt-1 tracking-tight">
+              System Health & Infrastructure Telemetry
+            </h1>
+            <p className="text-xs text-[#9E8E7A] mt-1 max-w-3xl">
+              Production-grade observability platform: real dependency health probes, multi-agent LangGraph execution telemetry, AI model routing availability, and persistent disk volume statistics.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Auto refresh select */}
+            <div className="flex items-center gap-1.5 rounded-lg border border-[#3A2A1D] bg-[#1A1510] px-3 py-1.5 text-xs text-[#C5A36A]">
+              <Clock className="h-3.5 w-3.5 text-[#E6A23C]" />
+              <span className="text-[11px] text-[#817463]">Auto-refresh:</span>
+              <select
+                aria-label="Auto-refresh interval"
+                value={refreshInterval === false ? 'off' : refreshInterval}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setRefreshInterval(val === 'off' ? false : Number(val));
+                }}
+                className="bg-transparent text-xs font-mono font-medium text-[#F4EBDD] focus:outline-none cursor-pointer"
+              >
+                <option value={10000} className="bg-[#14110D]">10s</option>
+                <option value={30000} className="bg-[#14110D]">30s</option>
+                <option value={60000} className="bg-[#14110D]">60s</option>
+                <option value="off" className="bg-[#14110D]">Off</option>
+              </select>
+            </div>
+
+            {/* Manual refresh button */}
+            <button
+              onClick={handleManualRefresh}
+              disabled={isManualRefreshing || isLoading}
+              className="inline-flex items-center gap-2 rounded-lg border border-[#E6A23C]/40 bg-[#221B14] px-4 py-2 text-xs font-medium text-[#F4EBDD] hover:bg-[#2F241B] hover:border-[#E6A23C] active:scale-95 transition-all duration-200 shadow-md"
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5 text-[#E6A23C]', (isManualRefreshing || isLoading) && 'animate-spin')} />
+              <span>{isManualRefreshing ? 'Probing...' : 'Refresh Telemetry'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 4 Stat Overview Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+          <div className="rounded-xl border border-[#3A2A1D] bg-[#18130E] p-4">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-[#817463]">Overall System State</span>
+            <div className="flex items-center gap-2.5 mt-2">
+              <span className={cn('h-3 w-3 rounded-full', sysStatus.dot, sysStatus.dot === 'bg-emerald-400' ? 'animate-pulse' : '')} />
+              <span className={cn('font-serif font-bold text-lg tracking-wide', sysStatus.text)}>
+                {sysStatus.label}
+              </span>
+            </div>
+            <p className="text-[11px] text-[#817463] mt-2">
+              {overview?.status === 'operational'
+                ? 'All critical backend services responsive.'
+                : 'One or more dependencies degraded or offline.'}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-[#3A2A1D] bg-[#18130E] p-4">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-[#817463]">Application Uptime</span>
+            <div className="flex items-center gap-2 mt-2">
+              <Clock className="h-5 w-5 text-[#C5A36A]" />
+              <span className="font-mono font-bold text-lg text-[#F4EBDD]">
+                {overview?.uptime_human || fmtDuration((overview?.uptime_seconds || 0) * 1000)}
+              </span>
+            </div>
+            <p className="text-[11px] text-[#817463] mt-2">
+              Continuous process execution (PID {overview?.process_id || '—'})
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-[#3A2A1D] bg-[#18130E] p-4">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-[#817463]">Runtime & Version</span>
+            <div className="flex items-center gap-2 mt-2">
+              <Cpu className="h-5 w-5 text-[#C5A36A]" />
+              <span className="font-mono font-bold text-base text-[#F4EBDD]">
+                v{overview?.version || '1.0.0'} · Python {overview?.python_version || '3.13'}
+              </span>
+            </div>
+            <p className="text-[11px] text-[#817463] mt-2 truncate">
+              {overview?.platform || 'Host Platform'}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-[#3A2A1D] bg-[#18130E] p-4">
+            <span className="text-[11px] font-mono uppercase tracking-wider text-[#817463]">Environment & Deployment</span>
+            <div className="flex items-center gap-2 mt-2">
+              <Server className="h-5 w-5 text-[#C5A36A]" />
+              <span className="font-mono font-bold text-lg text-[#E6A23C] uppercase">
+                {overview?.environment || 'DEVELOPMENT'}
+              </span>
+            </div>
+            <p className="text-[11px] text-[#817463] mt-2">
+              Last probe: {dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : 'Just now'}
+            </p>
+          </div>
+        </div>
+
+        {/* Section Navigation Tabs */}
+        <div className="flex flex-wrap items-center gap-2 mt-6 pt-5 border-t border-[#2C2117]">
+          {[
+            { id: 'all', label: 'All Telemetry' },
+            { id: 'infrastructure', label: 'Core Infrastructure' },
+            { id: 'providers', label: 'AI Providers' },
+            { id: 'agents', label: 'LangGraph Agents' },
+            { id: 'performance', label: 'API & HTTP Traffic' },
+            { id: 'storage', label: 'Storage & Disk' },
+            { id: 'events', label: 'Audit Events' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={cn(
+                'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-200',
+                activeTab === tab.id
+                  ? 'bg-[#C5A36A]/20 text-[#F4EBDD] border border-[#C5A36A]/40 shadow-sm'
+                  : 'text-[#817463] hover:text-[#C5A36A] hover:bg-[#1A1510]'
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="rounded-xl border border-[#453322] bg-[#10100E] p-4">
-          <p className="text-xs text-[#817463] mb-1">API Core Status</p>
-          <div className="flex items-center gap-2">
-            <span className={cn('h-3 w-3 rounded-full', (health?.status === 'ok' || dependencies?.status === 'ok') ? 'bg-emerald-500' : 'bg-red-500')} />
-            <span className="font-serif font-bold text-lg text-[#F3E9D7]">
-              {(dependencies?.status || health?.status || 'ONLINE').toUpperCase()}
-            </span>
+      {/* ── SECTION B: CORE INFRASTRUCTURE STATUS CARDS ────────────────────── */}
+      {(activeTab === 'all' || activeTab === 'infrastructure') && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Server className="h-5 w-5 text-[#E6A23C]" />
+              <h2 className="font-serif text-xl font-semibold text-[#F4EBDD]">Core Infrastructure Dependencies</h2>
+            </div>
+            <span className="text-xs font-mono text-[#817463]">Real Probes · Bounded Latency</span>
           </div>
-          <p className="text-xs text-[#817463] mt-2">
-            Uptime: {fmtDuration((health?.uptime_seconds || 0) * 1000)} · v{health?.version || '1.0.0'}
-          </p>
-        </div>
 
-        <div className="rounded-xl border border-[#453322] bg-[#10100E] p-4">
-          <p className="text-xs text-[#817463] mb-1">Default Model Provider</p>
-          <div className="flex items-center gap-2">
-            <Cpu className="h-5 w-5 text-[#C5A36A]" />
-            <span className="font-mono font-bold text-lg text-[#E9D6B6]">
-              {providers?.default?.toUpperCase() || 'GEMINI'}
-            </span>
-          </div>
-          <p className="text-xs text-[#817463] mt-2">
-            {providers?.providers?.length || 4} configured fallback routing channels
-          </p>
-        </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {infrastructure.map((card) => {
+              const st = getStatusColor(card.status);
+              return (
+                <div
+                  key={card.id}
+                  className="rounded-xl border border-[#3A2A1D] bg-[#14110D] p-5 shadow-lg flex flex-col justify-between hover:border-[#C5A36A]/40 transition-all duration-300"
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <div>
+                        <h3 className="font-serif text-base font-semibold text-[#F4EBDD]">{card.name}</h3>
+                        <span className="text-[10px] font-mono text-[#817463] uppercase tracking-wider">
+                          ID: {card.id}
+                        </span>
+                      </div>
+                      <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wider uppercase border', st.bg, st.border, st.text)}>
+                        {st.label}
+                      </span>
+                    </div>
 
-        <div className="rounded-xl border border-[#453322] bg-[#10100E] p-4">
-          <p className="text-xs text-[#817463] mb-1">Usage & Telemetry</p>
-          <div className="flex items-center gap-2">
-            <DollarSign className="h-5 w-5 text-emerald-400" />
-            <span className="font-mono font-bold text-lg text-emerald-400">
-              ${(usage?.total_estimated_cost_usd || 0).toFixed(4)}
-            </span>
-          </div>
-          <p className="text-xs text-[#817463] mt-2">
-            {usage?.total_tokens || 0} tokens processed across {usage?.total_requests || 0} runs
-          </p>
-        </div>
-      </div>
+                    {/* Operational Details */}
+                    <div className="space-y-2 text-xs pt-2 border-t border-[#251C14]">
+                      {card.latency_ms != null && (
+                        <div className="flex justify-between items-center text-[#9E8E7A]">
+                          <span>Measured Latency:</span>
+                          <span className="font-mono font-bold text-[#E6A23C]">{card.latency_ms.toFixed(1)} ms</span>
+                        </div>
+                      )}
 
-      <div className="rounded-xl border border-[#453322] bg-[#10100E] p-5 shadow-lg">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-serif text-lg font-semibold text-[#E9D6B6]">Live Dependency Probes</h3>
-          <span className="text-xs font-mono text-[#817463]">Auto-refreshed</span>
-        </div>
+                      {Object.entries(card.details || {}).map(([key, val]) => (
+                        <div key={key} className="flex justify-between items-center text-[#9E8E7A]">
+                          <span className="capitalize">{key.replace(/_/g, ' ')}:</span>
+                          <span className="font-mono font-medium text-[#F4EBDD] truncate max-w-[180px]">
+                            {typeof val === 'boolean' ? (val ? 'Yes' : 'No') : String(val)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
 
-        {healthLoading && depsLoading ? (
-          <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-10" />)}</div>
-        ) : checks.length === 0 ? (
-          <div className="py-4 text-center text-xs text-[#817463]">All primary backend services operating normally.</div>
-        ) : (
-          <div className="divide-y divide-[#302319]">
-            {checks.map((c: any, i: number) => (
-              <div key={i} className="flex justify-between items-center py-2.5 text-sm">
-                <div>
-                  <span className="text-[#F4EBDD] font-medium">{c.name}</span>
-                  {c.detail && <p className="text-[11px] text-[#817463]">{c.detail}</p>}
+                    {/* Error Notice */}
+                    {card.error_message && (
+                      <div className="mt-3 p-2.5 rounded-lg border border-red-500/30 bg-red-500/10 text-[11px] text-red-300 font-mono break-words">
+                        <span className="font-bold">Error: </span>
+                        {card.error_message}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-[#251C14] flex justify-between items-center text-[10px] text-[#817463]">
+                    <span>Checked: {new Date(card.last_checked).toLocaleTimeString()}</span>
+                    <span className="font-mono">{card.status === 'not_configured' ? 'Optional' : 'Core Service'}</span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  {c.duration_ms != null && (
-                    <span className="font-mono text-xs text-[#817463]">{c.duration_ms.toFixed(1)}ms</span>
-                  )}
-                  <StatusBadge status={c.state || 'ok'} />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTION C & D: AI PROVIDERS & SEARCH SOURCES ───────────────────── */}
+      {(activeTab === 'all' || activeTab === 'providers') && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* AI Providers */}
+          <div className="rounded-2xl border border-[#3A2A1D] bg-[#14110D] p-5 shadow-lg space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#251C14]">
+              <div className="flex items-center gap-2">
+                <Cpu className="h-5 w-5 text-[#E6A23C]" />
+                <h3 className="font-serif text-lg font-semibold text-[#F4EBDD]">AI Model Providers</h3>
+              </div>
+              <span className="text-xs font-mono text-[#817463]">Fallback Pipeline</span>
+            </div>
+
+            <div className="divide-y divide-[#251C14]">
+              {providers.map((p) => {
+                const st = getStatusColor(p.reachability);
+                return (
+                  <div key={p.provider} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm text-[#F4EBDD]">{p.name}</span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[#221B14] text-[#C5A36A] border border-[#3A2A1D]">
+                          Priority #{p.fallback_rank}
+                        </span>
+                      </div>
+                      <p className="text-xs font-mono text-[#817463] mt-0.5">
+                        Default: <span className="text-[#E6A23C]">{p.default_model}</span>
+                      </p>
+                      {p.latency_ms != null && (
+                        <p className="text-[11px] text-[#817463]">
+                          Probe Latency: <span className="font-mono text-[#F4EBDD]">{p.latency_ms.toFixed(1)}ms</span>
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex sm:flex-col sm:items-end gap-1.5">
+                      <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase border', st.bg, st.border, st.text)}>
+                        {st.label}
+                      </span>
+                      {p.last_error && (
+                        <span className="text-[10px] text-red-400 font-mono truncate max-w-[150px]">
+                          {p.last_error}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Search Source Integrations */}
+          <div className="rounded-2xl border border-[#3A2A1D] bg-[#14110D] p-5 shadow-lg space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#251C14]">
+              <div className="flex items-center gap-2">
+                <Globe className="h-5 w-5 text-[#E6A23C]" />
+                <h3 className="font-serif text-lg font-semibold text-[#F4EBDD]">Research Retrieval Sources</h3>
+              </div>
+              <span className="text-xs font-mono text-[#817463]">Multi-Source Adapters</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[440px] overflow-y-auto pr-1">
+              {searchSources.map((s) => {
+                const st = getStatusColor(s.reachability);
+                return (
+                  <div key={s.id} className="p-3 rounded-xl border border-[#2B2117] bg-[#1A1510] space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-xs text-[#F4EBDD] truncate">{s.name}</span>
+                      <span className={cn('px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase', st.bg, st.text)}>
+                        {st.label}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#817463]">{s.category}</p>
+                    <div className="flex justify-between items-center text-[10px] text-[#9E8E7A] pt-1 border-t border-[#251C14]">
+                      <span>{s.access_type}</span>
+                      <span className="truncate max-w-[110px]">{s.rate_limit_info || 'Standard'}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTION E: RESEARCH PIPELINE EXECUTION ─────────────────────────── */}
+      {(activeTab === 'all' || activeTab === 'agents') && (
+        <div className="rounded-2xl border border-[#3A2A1D] bg-[#14110D] p-6 shadow-lg space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-[#251C14]">
+            <div className="flex items-center gap-2">
+              <Activity className="h-5 w-5 text-[#E6A23C]" />
+              <div>
+                <h3 className="font-serif text-lg font-semibold text-[#F4EBDD]">Research Pipeline & Execution Metrics</h3>
+                <p className="text-xs text-[#817463]">Actual database execution counts, completion rates, and active workloads.</p>
+              </div>
+            </div>
+            <span className="px-3 py-1 rounded-full text-xs font-mono bg-[#221B14] text-[#C5A36A] border border-[#3A2A1D]">
+              {researchExec?.celery_configured ? 'Distributed Worker Queue' : 'In-Process Async Executor'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="p-3.5 rounded-xl border border-[#2B2117] bg-[#19140F]">
+              <span className="text-[10px] font-mono uppercase text-[#817463]">Total Sessions</span>
+              <p className="font-mono text-xl font-bold text-[#F4EBDD] mt-1">{researchExec?.total_sessions || 0}</p>
+              <span className="text-[10px] text-[#817463]">Recorded runs</span>
+            </div>
+
+            <div className="p-3.5 rounded-xl border border-[#2B2117] bg-[#19140F]">
+              <span className="text-[10px] font-mono uppercase text-[#817463]">Completed</span>
+              <p className="font-mono text-xl font-bold text-emerald-400 mt-1">{researchExec?.completed_sessions || 0}</p>
+              <span className="text-[10px] text-[#817463]">Final reports</span>
+            </div>
+
+            <div className="p-3.5 rounded-xl border border-[#2B2117] bg-[#19140F]">
+              <span className="text-[10px] font-mono uppercase text-[#817463]">In Progress</span>
+              <p className="font-mono text-xl font-bold text-amber-400 mt-1">{researchExec?.active_sessions || 0}</p>
+              <span className="text-[10px] text-[#817463]">Active pipelines</span>
+            </div>
+
+            <div className="p-3.5 rounded-xl border border-[#2B2117] bg-[#19140F]">
+              <span className="text-[10px] font-mono uppercase text-[#817463]">Failed</span>
+              <p className="font-mono text-xl font-bold text-red-400 mt-1">{researchExec?.failed_sessions || 0}</p>
+              <span className="text-[10px] text-[#817463]">Unrecovered runs</span>
+            </div>
+
+            <div className="p-3.5 rounded-xl border border-[#2B2117] bg-[#19140F]">
+              <span className="text-[10px] font-mono uppercase text-[#817463]">Avg Duration</span>
+              <p className="font-mono text-xl font-bold text-[#E6A23C] mt-1">
+                {researchExec?.average_duration_seconds != null ? `${researchExec.average_duration_seconds}s` : '—'}
+              </p>
+              <span className="text-[10px] text-[#817463]">Per investigation</span>
+            </div>
+
+            <div className="p-3.5 rounded-xl border border-[#2B2117] bg-[#19140F]">
+              <span className="text-[10px] font-mono uppercase text-[#817463]">Stage Retries</span>
+              <p className="font-mono text-xl font-bold text-[#F4EBDD] mt-1">{researchExec?.total_agent_retries || 0}</p>
+              <span className="text-[10px] text-[#817463]">Handled retries</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTION F: LANGGRAPH AGENT STAGES ──────────────────────────────── */}
+      {(activeTab === 'all' || activeTab === 'agents') && (
+        <div className="rounded-2xl border border-[#3A2A1D] bg-[#14110D] p-6 shadow-lg space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-[#251C14]">
+            <div className="flex items-center gap-2">
+              <Brain className="h-5 w-5 text-[#E6A23C]" />
+              <div>
+                <h3 className="font-serif text-lg font-semibold text-[#F4EBDD]">LangGraph Multi-Agent Orchestration Nodes</h3>
+                <p className="text-xs text-[#817463]">Execution counts, success rates, and mean execution latency per graph node.</p>
+              </div>
+            </div>
+            <span className="text-xs font-mono text-[#817463]">14 Instrumented Stages</span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[#1C1712] text-[#817463] font-mono uppercase text-[10px]">
+                <tr>
+                  <th className="py-2.5 px-3">Node / Chain</th>
+                  <th className="py-2.5 px-3">Category</th>
+                  <th className="py-2.5 px-3">Total Runs</th>
+                  <th className="py-2.5 px-3">Success Rate</th>
+                  <th className="py-2.5 px-3">Avg Duration</th>
+                  <th className="py-2.5 px-3">Status</th>
+                  <th className="py-2.5 px-3">Last Executed</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#251C14]">
+                {agentStages.map((stage) => (
+                  <tr key={stage.stage_id} className="hover:bg-[#1A1510] transition-colors">
+                    <td className="py-2.5 px-3">
+                      <span className="font-medium text-[#F4EBDD]">{stage.name}</span>
+                      <span className="block text-[10px] font-mono text-[#817463]">{stage.stage_id}</span>
+                    </td>
+                    <td className="py-2.5 px-3">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-[#221B14] text-[#C5A36A] border border-[#3A2A1D]">
+                        {stage.category}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 font-mono font-bold text-[#F4EBDD]">{stage.total_executions}</td>
+                    <td className="py-2.5 px-3 font-mono">
+                      <span className={stage.success_rate >= 90 ? 'text-emerald-400' : 'text-amber-400'}>
+                        {stage.total_executions > 0 ? `${stage.success_rate.toFixed(1)}%` : '—'}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[#E6A23C]">
+                      {stage.average_duration_ms != null ? `${stage.average_duration_ms.toFixed(1)} ms` : '—'}
+                    </td>
+                    <td className="py-2.5 px-3">
+                      <span className={cn(
+                        'px-2 py-0.5 rounded-full text-[10px] font-mono uppercase font-bold',
+                        stage.current_status === 'active' ? 'bg-amber-500/20 text-amber-400' : 'bg-[#221B14] text-[#817463]'
+                      )}>
+                        {stage.current_status}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-[#817463] font-mono text-[11px]">
+                      {stage.last_executed_at ? new Date(stage.last_executed_at).toLocaleTimeString() : 'Standby'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTION G & H: API PERFORMANCE & AI USAGE ──────────────────────── */}
+      {(activeTab === 'all' || activeTab === 'performance') && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* API Metrics */}
+          <div className="rounded-2xl border border-[#3A2A1D] bg-[#14110D] p-5 shadow-lg space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#251C14]">
+              <div className="flex items-center gap-2">
+                <Gauge className="h-5 w-5 text-[#E6A23C]" />
+                <h3 className="font-serif text-lg font-semibold text-[#F4EBDD]">API Performance & Prometheus Metrics</h3>
+              </div>
+              <span className="text-xs font-mono text-[#817463]">{apiPerf?.active_window || 'Lifetime'}</span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="p-3 rounded-xl border border-[#2B2117] bg-[#19140F]">
+                <span className="text-[10px] font-mono text-[#817463]">Total Requests</span>
+                <p className="font-mono text-lg font-bold text-[#F4EBDD] mt-1">{apiPerf?.total_requests || 0}</p>
+                <span className="text-[10px] text-[#817463]">{apiPerf?.requests_per_minute || 0} req/min</span>
+              </div>
+
+              <div className="p-3 rounded-xl border border-[#2B2117] bg-[#19140F]">
+                <span className="text-[10px] font-mono text-[#817463]">Average Latency</span>
+                <p className="font-mono text-lg font-bold text-[#E6A23C] mt-1">{apiPerf?.average_latency_ms || 0} ms</p>
+                <span className="text-[10px] text-[#817463]">Mean response time</span>
+              </div>
+
+              <div className="p-3 rounded-xl border border-[#2B2117] bg-[#19140F]">
+                <span className="text-[10px] font-mono text-[#817463]">Error Rate</span>
+                <p className="font-mono text-lg font-bold text-emerald-400 mt-1">{apiPerf?.error_rate_percent || 0}%</p>
+                <span className="text-[10px] text-[#817463]">4xx & 5xx responses</span>
+              </div>
+
+              <div className="p-3 rounded-xl border border-[#2B2117] bg-[#19140F]">
+                <span className="text-[10px] font-mono text-[#817463]">P95 Latency</span>
+                <p className="font-mono text-lg font-bold text-[#F4EBDD] mt-1">{apiPerf?.p95_latency_ms || 0} ms</p>
+                <span className="text-[10px] text-[#817463]">95th percentile</span>
+              </div>
+
+              <div className="p-3 rounded-xl border border-[#2B2117] bg-[#19140F]">
+                <span className="text-[10px] font-mono text-[#817463]">P99 Latency</span>
+                <p className="font-mono text-lg font-bold text-[#F4EBDD] mt-1">{apiPerf?.p99_latency_ms || 0} ms</p>
+                <span className="text-[10px] text-[#817463]">99th percentile</span>
+              </div>
+
+              <div className="p-3 rounded-xl border border-[#2B2117] bg-[#19140F]">
+                <span className="text-[10px] font-mono text-[#817463]">Concurrent Conns</span>
+                <p className="font-mono text-lg font-bold text-[#F4EBDD] mt-1">{apiPerf?.concurrent_connections || 0}</p>
+                <span className="text-[10px] text-[#817463]">Active sockets</span>
+              </div>
+            </div>
+
+            {/* HTTP Status Code Bars */}
+            <div className="p-3.5 rounded-xl border border-[#2B2117] bg-[#19140F] space-y-2">
+              <span className="text-[11px] font-mono text-[#C5A36A]">HTTP Response Distribution</span>
+              <div className="flex items-center justify-between text-xs font-mono">
+                <span className="text-emerald-400">2xx Success: {apiPerf?.http_2xx || 0}</span>
+                <span className="text-amber-400">4xx Client: {apiPerf?.http_4xx || 0}</span>
+                <span className="text-red-400">5xx Server: {apiPerf?.http_5xx || 0}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* AI Usage & Cost */}
+          <div className="rounded-2xl border border-[#3A2A1D] bg-[#14110D] p-5 shadow-lg space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#251C14]">
+              <div className="flex items-center gap-2">
+                <DollarSign className="h-5 w-5 text-emerald-400" />
+                <h3 className="font-serif text-lg font-semibold text-[#F4EBDD]">AI Usage & Estimated Cost</h3>
+              </div>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                Estimated USD
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="p-3 rounded-xl border border-[#2B2117] bg-[#19140F]">
+                <span className="text-[10px] font-mono text-[#817463]">Total Cost</span>
+                <p className="font-mono text-lg font-bold text-emerald-400 mt-1">
+                  ${(llmUsage?.total_estimated_cost_usd || 0).toFixed(4)}
+                </p>
+                <span className="text-[10px] text-[#817463]">Calculated price</span>
+              </div>
+
+              <div className="p-3 rounded-xl border border-[#2B2117] bg-[#19140F]">
+                <span className="text-[10px] font-mono text-[#817463]">Total Tokens</span>
+                <p className="font-mono text-lg font-bold text-[#F4EBDD] mt-1">{llmUsage?.total_tokens || 0}</p>
+                <span className="text-[10px] text-[#817463]">Prompt + Completion</span>
+              </div>
+
+              <div className="p-3 rounded-xl border border-[#2B2117] bg-[#19140F]">
+                <span className="text-[10px] font-mono text-[#817463]">Total Invocations</span>
+                <p className="font-mono text-lg font-bold text-[#E6A23C] mt-1">{llmUsage?.total_calls || 0}</p>
+                <span className="text-[10px] text-[#817463]">LLM API calls</span>
+              </div>
+            </div>
+
+            {/* Provider Breakdown */}
+            <div className="space-y-2 pt-2">
+              <span className="text-xs font-mono text-[#817463]">Provider Usage Breakdown:</span>
+              <div className="space-y-1.5 max-h-[140px] overflow-y-auto">
+                {(llmUsage?.providers || []).map((pr) => (
+                  <div key={pr.provider} className="flex justify-between items-center text-xs p-2 rounded border border-[#2B2117] bg-[#1A1510]">
+                    <span className="font-medium text-[#F4EBDD] capitalize">{pr.provider}</span>
+                    <span className="font-mono text-[#9E8E7A]">
+                      {pr.calls} calls · {pr.tokens} tokens · <span className="text-emerald-400 font-bold">${pr.cost_usd.toFixed(4)}</span>
+                    </span>
+                  </div>
+                ))}
+                {(llmUsage?.providers || []).length === 0 && (
+                  <div className="text-center py-3 text-xs text-[#817463] font-mono">
+                    No billed usage events logged in current session.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTION I: STORAGE & DISK VOLUME BREAKDOWN ─────────────────────── */}
+      {(activeTab === 'all' || activeTab === 'storage') && (
+        <div className="rounded-2xl border border-[#3A2A1D] bg-[#14110D] p-6 shadow-lg space-y-6">
+          <div className="flex items-center justify-between pb-3 border-b border-[#251C14]">
+            <div className="flex items-center gap-2">
+              <HardDrive className="h-5 w-5 text-[#E6A23C]" />
+              <div>
+                <h3 className="font-serif text-lg font-semibold text-[#F4EBDD]">Storage & Persistent Volume Breakdown</h3>
+                <p className="text-xs text-[#817463]">Database rows, ChromaDB vectors, report artifacts, and disk volume capacity.</p>
+              </div>
+            </div>
+            <span className="px-3 py-1 rounded-full text-xs font-mono bg-[#221B14] text-[#E6A23C] border border-[#3A2A1D]">
+              {storage?.local_storage?.volume_label || 'Local Disk Volume'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* PostgreSQL Data */}
+            <div className="p-4 rounded-xl border border-[#2B2117] bg-[#19140F] space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-sm text-[#F4EBDD]">PostgreSQL Persistence</span>
+                <span className={cn('px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold', getStatusColor(storage?.postgres?.status).bg, getStatusColor(storage?.postgres?.status).text)}>
+                  {storage?.postgres?.status || 'Unknown'}
+                </span>
+              </div>
+              <div className="space-y-1.5 text-xs text-[#9E8E7A] font-mono">
+                {Object.entries(storage?.postgres?.tables || {}).map(([tbl, cnt]) => (
+                  <div key={tbl} className="flex justify-between">
+                    <span>{tbl}:</span>
+                    <span className="text-[#F4EBDD] font-bold">{cnt} rows</span>
+                  </div>
+                ))}
+                {Object.keys(storage?.postgres?.tables || {}).length === 0 && (
+                  <p className="text-[#817463] text-xs">PostgreSQL offline or tables pending hydration.</p>
+                )}
+              </div>
+            </div>
+
+            {/* ChromaDB Vector Collections */}
+            <div className="p-4 rounded-xl border border-[#2B2117] bg-[#19140F] space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-sm text-[#F4EBDD]">ChromaDB Vector Store</span>
+                <span className={cn('px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold', getStatusColor(storage?.chromadb?.status).bg, getStatusColor(storage?.chromadb?.status).text)}>
+                  {storage?.chromadb?.status || 'Operational'}
+                </span>
+              </div>
+              <div className="space-y-1.5 text-xs text-[#9E8E7A]">
+                <div className="flex justify-between">
+                  <span>Collections:</span>
+                  <span className="font-mono font-bold text-[#F4EBDD]">{storage?.chromadb?.collection_count || 0}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Total Vector Chunks:</span>
+                  <span className="font-mono font-bold text-[#E6A23C]">{storage?.chromadb?.total_vectors || 0}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Storage Mount:</span>
+                  <span className="font-mono text-[#F4EBDD]">{storage?.chromadb?.path || './chroma_db'}</span>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+            </div>
 
-      <div className="rounded-xl border border-[#453322] bg-[#10100E] p-5 shadow-lg">
-        <h3 className="font-serif text-lg font-semibold text-[#E9D6B6] mb-2">Observability & Telemetry Dashboards</h3>
-        <p className="text-xs text-[#C0B19C] mb-4">
-          Prometheus metrics and OpenAPI documentation are served directly by the FastAPI backend instance.
+            {/* Local Artifacts & Disk */}
+            <div className="p-4 rounded-xl border border-[#2B2117] bg-[#19140F] space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-sm text-[#F4EBDD]">Host Disk Volume</span>
+                <span className="font-mono text-xs text-[#E6A23C]">
+                  {storage?.local_storage?.disk_free_gb || 0} GB Free
+                </span>
+              </div>
+
+              {/* Disk Bar */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[11px] font-mono text-[#817463]">
+                  <span>Used: {storage?.local_storage?.disk_used_gb || 0} GB</span>
+                  <span>Total: {storage?.local_storage?.disk_total_gb || 0} GB</span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-[#2A231C] overflow-hidden">
+                  <div
+                    className={cn(
+                      'h-full rounded-full transition-all duration-500',
+                      (storage?.local_storage?.disk_used_percent || 0) > 90 ? 'bg-amber-500' : 'bg-[#C5A36A]'
+                    )}
+                    style={{ width: `${Math.min(100, storage?.local_storage?.disk_used_percent || 0)}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1 text-xs text-[#9E8E7A] pt-1">
+                <div className="flex justify-between">
+                  <span>Reports:</span>
+                  <span className="font-mono font-bold text-[#F4EBDD]">{storage?.local_storage?.reports_count || 0} files</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Uploaded Docs:</span>
+                  <span className="font-mono font-bold text-[#F4EBDD]">{storage?.local_storage?.uploads_count || 0} files</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>App Footprint:</span>
+                  <span className="font-mono font-bold text-[#E6A23C]">{storage?.local_storage?.app_storage_used_mb || 0} MB</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTION J: RECENT AUDIT & SYSTEM EVENTS ────────────────────────── */}
+      {(activeTab === 'all' || activeTab === 'events') && (
+        <div className="rounded-2xl border border-[#3A2A1D] bg-[#14110D] p-6 shadow-lg space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#251C14]">
+            <div className="flex items-center gap-2">
+              <Terminal className="h-5 w-5 text-[#E6A23C]" />
+              <h3 className="font-serif text-lg font-semibold text-[#F4EBDD]">Recent Operational & Audit Events</h3>
+            </div>
+
+            {/* Event Category Filter */}
+            <div className="flex items-center gap-1.5">
+              {['all', 'pipeline', 'system', 'database', 'storage'].map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setEventCategoryFilter(cat)}
+                  className={cn(
+                    'px-2.5 py-1 rounded text-[11px] font-mono capitalize transition-colors',
+                    eventCategoryFilter === cat
+                      ? 'bg-[#E6A23C] text-black font-bold'
+                      : 'bg-[#1C1712] text-[#817463] hover:text-[#C5A36A]'
+                  )}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+            {filteredEvents.map((ev) => {
+              const sev = ev.severity?.toLowerCase() || 'info';
+              const sevColor =
+                sev === 'error' || sev === 'critical'
+                  ? 'border-red-500/30 bg-red-500/10 text-red-300'
+                  : sev === 'warning'
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                  : 'border-[#3A2A1D] bg-[#19140F] text-[#F4EBDD]';
+
+              return (
+                <div key={ev.id} className={cn('p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs', sevColor)}>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold uppercase tracking-wider text-[10px] text-[#C5A36A]">[{ev.category}]</span>
+                      <span className="font-mono text-[11px] text-[#817463]">{ev.component}</span>
+                    </div>
+                    <p className="font-sans text-xs">{ev.message}</p>
+                  </div>
+                  <span className="font-mono text-[11px] text-[#817463] whitespace-nowrap">
+                    {new Date(ev.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+              );
+            })}
+
+            {filteredEvents.length === 0 && (
+              <div className="text-center py-6 text-xs text-[#817463] font-mono">
+                No recent events recorded in this category.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTION K: OBSERVABILITY TOOLS & EXTERNAL LINKS ────────────────── */}
+      <div className="rounded-2xl border border-[#3A2A1D] bg-[#14110D] p-5 shadow-lg space-y-3">
+        <h3 className="font-serif text-base font-semibold text-[#F4EBDD]">Observability Endpoints & Developer Tools</h3>
+        <p className="text-xs text-[#817463]">
+          Live Prometheus scrape targets, OpenAPI schemas, and interactive Swagger/ReDoc interfaces served directly by the backend instance.
         </p>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap gap-3 pt-1">
           <a
             href={`${API_BASE}/metrics`}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[#453322] bg-[#14110D] px-3 py-2 text-xs font-medium text-[#E9D6B6] hover:bg-[#1B1510] hover:text-[#F4EBDD] transition-colors"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#3A2A1D] bg-[#1C1712] px-3.5 py-2 text-xs font-medium text-[#F4EBDD] hover:bg-[#251E17] hover:border-[#E6A23C] transition-all"
           >
-            <ExternalLink className="h-3.5 w-3.5 text-[#C5A36A]" /> Prometheus Metrics Endpoint
+            <ExternalLink className="h-3.5 w-3.5 text-[#E6A23C]" /> Prometheus Scrape Endpoint (/metrics)
           </a>
           <a
             href={`${API_BASE}/docs`}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[#453322] bg-[#14110D] px-3 py-2 text-xs font-medium text-[#E9D6B6] hover:bg-[#1B1510] hover:text-[#F4EBDD] transition-colors"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#3A2A1D] bg-[#1C1712] px-3.5 py-2 text-xs font-medium text-[#F4EBDD] hover:bg-[#251E17] hover:border-[#E6A23C] transition-all"
           >
-            <ExternalLink className="h-3.5 w-3.5 text-[#C5A36A]" /> Swagger OpenAPI Docs
+            <ExternalLink className="h-3.5 w-3.5 text-[#E6A23C]" /> Swagger OpenAPI Docs (/docs)
+          </a>
+          <a
+            href={`${API_BASE}/redoc`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#3A2A1D] bg-[#1C1712] px-3.5 py-2 text-xs font-medium text-[#F4EBDD] hover:bg-[#251E17] hover:border-[#E6A23C] transition-all"
+          >
+            <ExternalLink className="h-3.5 w-3.5 text-[#E6A23C]" /> ReDoc Specification (/redoc)
+          </a>
+          <a
+            href={`${API_BASE}/openapi.json`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#3A2A1D] bg-[#1C1712] px-3.5 py-2 text-xs font-medium text-[#F4EBDD] hover:bg-[#251E17] hover:border-[#E6A23C] transition-all"
+          >
+            <ExternalLink className="h-3.5 w-3.5 text-[#E6A23C]" /> OpenAPI JSON (/openapi.json)
           </a>
         </div>
       </div>

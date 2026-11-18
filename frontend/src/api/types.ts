@@ -367,4 +367,165 @@ export interface ComparisonChatMessage {
   created_at: string;
 }
 
+/* ============================================================
+ * Production Observability & Infrastructure Monitoring Types
+ * ============================================================ */
+
+export interface SystemOverviewData {
+  status: 'operational' | 'degraded' | 'partial_outage' | 'unavailable' | 'unknown';
+  version: string;
+  environment: string;
+  uptime_seconds: number;
+  uptime_human: string;
+  process_id: number;
+  python_version: string;
+  platform: string;
+  timestamp: string;
+}
+
+export interface InfrastructureCardData {
+  id: string;
+  name: string;
+  status: 'operational' | 'degraded' | 'unavailable' | 'not_configured' | 'unknown';
+  latency_ms?: number | null;
+  last_checked: string;
+  details: Record<string, any>;
+  error_message?: string | null;
+}
+
+export interface AIProviderMonitoringData {
+  provider: string;
+  name: string;
+  configured: boolean;
+  state: string;
+  reachability: 'available' | 'reachable' | 'unavailable' | 'not_probed' | 'missing_credentials';
+  default_model: string;
+  supported_models: string[];
+  fallback_rank: number;
+  latency_ms?: number | null;
+  last_check?: string | null;
+  last_error?: string | null;
+}
+
+export interface SearchSourceMonitoringData {
+  id: string;
+  name: string;
+  category: string;
+  configured: boolean;
+  access_type: string;
+  reachability: string;
+  rate_limit_info?: string | null;
+  last_checked: string;
+}
+
+export interface ResearchExecutionMonitoringData {
+  total_sessions: number;
+  active_sessions: number;
+  completed_sessions: number;
+  failed_sessions: number;
+  cancelled_sessions: number;
+  average_duration_seconds?: number | null;
+  total_agent_retries: number;
+  celery_configured: boolean;
+  queue_depth?: number | null;
+  active_workers?: number | null;
+  active_tasks?: number | null;
+  failed_tasks?: number | null;
+}
+
+export interface AgentStageMetricData {
+  stage_id: string;
+  name: string;
+  category: string;
+  total_executions: number;
+  successful_executions: number;
+  failed_executions: number;
+  success_rate: number;
+  average_duration_ms?: number | null;
+  last_executed_at?: string | null;
+  current_status: string;
+}
+
+export interface ApiPerformanceMetricsData {
+  total_requests: number;
+  requests_per_minute: number;
+  average_latency_ms: number;
+  p95_latency_ms: number;
+  p99_latency_ms: number;
+  http_2xx: number;
+  http_4xx: number;
+  http_5xx: number;
+  error_rate_percent: number;
+  concurrent_connections: number;
+  active_window: string;
+}
+
+export interface LLMUsageMonitoringData {
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_tokens: number;
+  total_calls: number;
+  total_estimated_cost_usd: number;
+  avg_cost_per_session_usd: number;
+  failed_calls: number;
+  providers: Array<{ provider: string; calls: number; tokens: number; cost_usd: number }>;
+  models: Array<{ model: string; provider: string; calls: number; tokens: number; cost_usd: number }>;
+  tracked: boolean;
+}
+
+export interface StorageMonitoringData {
+  postgres: {
+    status?: string;
+    connected?: boolean;
+    tables?: Record<string, number>;
+    error?: string;
+  };
+  chromadb: {
+    status?: string;
+    collection_count?: number;
+    total_vectors?: number;
+    collections?: string[];
+    path?: string;
+    error?: string;
+  };
+  local_storage: {
+    read_write_verified?: boolean;
+    reports_count?: number;
+    uploads_count?: number;
+    exports_count?: number;
+    app_storage_used_mb?: number;
+    disk_total_gb?: number;
+    disk_used_gb?: number;
+    disk_free_gb?: number;
+    disk_used_percent?: number;
+    persistent_mount?: boolean;
+    volume_label?: string;
+    error?: string;
+  };
+}
+
+export interface RecentSystemEventData {
+  id: string;
+  timestamp: string;
+  category: string;
+  severity: 'info' | 'warning' | 'error' | 'critical';
+  component: string;
+  message: string;
+}
+
+export interface DashboardOverviewData {
+  overview: SystemOverviewData;
+  infrastructure: InfrastructureCardData[];
+  providers: AIProviderMonitoringData[];
+  search_sources: SearchSourceMonitoringData[];
+  research_execution: ResearchExecutionMonitoringData;
+  agent_stages: AgentStageMetricData[];
+  api_performance: ApiPerformanceMetricsData;
+  llm_usage: LLMUsageMonitoringData;
+  storage: StorageMonitoringData;
+  recent_events: RecentSystemEventData[];
+  timestamp: string;
+}
+
+
 

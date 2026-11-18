@@ -152,5 +152,18 @@ export const API = {
     providers: '/providers',
     metrics: '/metrics',
   },
+  monitoring: {
+    overview: '/monitoring/overview',
+    system: '/monitoring/system',
+    infrastructure: '/monitoring/infrastructure',
+    providers: '/monitoring/providers',
+    searchSources: '/monitoring/search-sources',
+    researchExecutions: '/monitoring/research-executions',
+    agentMetrics: '/monitoring/agent-metrics',
+    apiPerformance: '/monitoring/api-performance',
+    usage: '/monitoring/usage',
+    storage: '/monitoring/storage',
+    events: '/monitoring/events',
+  },
 };
 

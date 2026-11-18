@@ -56,6 +56,8 @@ DEFAULT_PROBE_TTL_SECONDS = 30.0
 # gracefully instead of blocking the process endpoint.
 DEFAULT_CHECK_TIMEOUT_SECONDS = 2.0
 
+_PROCESS_START_MONOTONIC = time.monotonic()
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -118,10 +120,12 @@ class HealthService:
 
     def liveness(self) -> HealthStatus:
         """The process is alive. Never fails for optional external deps."""
+        uptime = max(0.0, time.monotonic() - _PROCESS_START_MONOTONIC)
         return HealthStatus(
             status=HealthState.OK,
             version=self._settings.api_version,
             environment=self._settings.app_env,
+            uptime_seconds=round(uptime, 1),
             checks=[self._check_process()],
         )
 
@@ -132,10 +136,12 @@ class HealthService:
             self._check_database(),
             self._check_storage(),
         ]
+        uptime = max(0.0, time.monotonic() - _PROCESS_START_MONOTONIC)
         return HealthStatus(
             status=self._derive(checks, core={"process", "database", "storage"}),
             version=self._settings.api_version,
             environment=self._settings.app_env,
+            uptime_seconds=round(uptime, 1),
             checks=checks,
         )
 
