@@ -13,6 +13,7 @@ from app.api import (
     memory,
     notifications,
     projects,
+    report_comparison,
     report_generation,
     report_management,
     reports,
@@ -32,6 +33,7 @@ api_router.include_router(research.router)
 api_router.include_router(projects.router)
 api_router.include_router(research_sessions.router)
 api_router.include_router(claims.router)
+api_router.include_router(report_comparison.router)
 api_router.include_router(memory.router)
 api_router.include_router(report_generation.router)
 api_router.include_router(agent_history.router)

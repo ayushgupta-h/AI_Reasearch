@@ -271,3 +271,100 @@ export interface UsageSummaryResponse {
   per_provider?: Array<{ provider: string; requests: number; total_tokens: number; estimated_cost_usd: number; failures: number }>;
 }
 
+export interface ComparisonEvidence {
+  passage: string;
+  section: string;
+  page?: number | null;
+}
+
+export interface ComparisonDimension {
+  dimension_id: string;
+  title: string;
+  report_a_content: string;
+  report_b_content: string;
+  comparison_verdict: string;
+  status: 'agreement' | 'contradiction' | 'partial_contradiction' | 'methodological_difference' | 'dataset_difference' | 'missing_information';
+  explanation?: string;
+  evidence_a?: ComparisonEvidence[];
+  evidence_b?: ComparisonEvidence[];
+}
+
+export interface ComparisonDifference {
+  category: string;
+  severity: 'high' | 'medium' | 'low';
+  description: string;
+  report_a_claim: string;
+  report_b_claim: string;
+  explanation: string;
+  resolution_notes: string;
+}
+
+export interface ComparisonOverviewStats {
+  sections_compared: number;
+  findings_compared: number;
+  agreements_count: number;
+  contradictions_count: number;
+  methodological_diff_count: number;
+  unresolved_issues_count: number;
+}
+
+export interface ReportComparisonRecord {
+  comparison_id: string;
+  owner_id: string;
+  title: string;
+  report_a_id: string;
+  report_a_title: string;
+  report_a_type: 'uploaded' | 'generated';
+  report_b_id: string;
+  report_b_title: string;
+  report_b_type: 'uploaded' | 'generated';
+  status: 'completed' | 'analyzing' | 'failed';
+  summary_json?: ComparisonOverviewStats;
+  analysis_json?: {
+    executive_summary?: string;
+    overview_stats?: ComparisonOverviewStats;
+    dimensions?: ComparisonDimension[];
+    key_differences?: ComparisonDifference[];
+    methodology_comparison?: { report_a_method: string; report_b_method: string; comparison: string };
+    evidence_strength?: { report_a_assessment: string; report_b_assessment: string; synthesis: string };
+    unresolved_questions?: string[];
+  };
+  sections_json?: ComparisonDimension[];
+  differences_json?: ComparisonDifference[];
+  created_at: string;
+  updated_at: string;
+  report_a_meta?: {
+    id: string;
+    title: string;
+    type: string;
+    created_at?: string;
+    page_count?: number;
+  };
+  report_b_meta?: {
+    id: string;
+    title: string;
+    type: string;
+    created_at?: string;
+    page_count?: number;
+  };
+}
+
+export interface ComparisonCitation {
+  source: 'Report A' | 'Report B';
+  title: string;
+  section: string;
+  page?: number;
+  snippet: string;
+}
+
+export interface ComparisonChatMessage {
+  message_id: string;
+  comparison_id: string;
+  owner_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  citations?: ComparisonCitation[];
+  created_at: string;
+}
+
+

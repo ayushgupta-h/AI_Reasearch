@@ -172,6 +172,41 @@ def init_postgres_schema() -> bool:
                     CREATE INDEX IF NOT EXISTS ix_app_files_doc ON app_document_files(document_id);
                 """))
 
+                # 7. Report comparisons & messages table
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS app_report_comparisons (
+                        comparison_id    TEXT PRIMARY KEY,
+                        owner_id         TEXT NOT NULL,
+                        title            TEXT NOT NULL,
+                        report_a_id      TEXT NOT NULL,
+                        report_a_title   TEXT NOT NULL,
+                        report_a_type    TEXT NOT NULL,
+                        report_b_id      TEXT NOT NULL,
+                        report_b_title   TEXT NOT NULL,
+                        report_b_type    TEXT NOT NULL,
+                        status           TEXT NOT NULL,
+                        summary_json     TEXT,
+                        analysis_json    TEXT,
+                        sections_json    TEXT,
+                        differences_json TEXT,
+                        created_at       TEXT NOT NULL,
+                        updated_at       TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS ix_app_comp_owner ON app_report_comparisons(owner_id);
+                    CREATE INDEX IF NOT EXISTS ix_app_comp_time ON app_report_comparisons(created_at DESC);
+
+                    CREATE TABLE IF NOT EXISTS app_comparison_messages (
+                        message_id     TEXT PRIMARY KEY,
+                        comparison_id  TEXT NOT NULL,
+                        owner_id       TEXT NOT NULL,
+                        role           TEXT NOT NULL,
+                        content        TEXT NOT NULL,
+                        citations_json TEXT,
+                        created_at     TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS ix_app_comp_msgs ON app_comparison_messages(comparison_id, created_at ASC);
+                """))
+
             _SCHEMA_INITIALIZED = True
             logger.info("postgres_bridge.schema_ready")
             return True
@@ -350,8 +385,14 @@ def hydrate_sqlite_from_postgres(sqlite_conn: sqlite3.Connection, user_id: Optio
 
 # ── Sessions Persistence ─────────────────────────────────────────────────────
 
+_LOCAL_SAVED_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
 def persist_session(row: Dict[str, Any]) -> None:
-    """Save or update a research session in Supabase PostgreSQL."""
+    """Save or update a research session in Supabase PostgreSQL and local cache."""
+    sid = str(row.get("session_id") or "").strip()
+    if sid:
+        _LOCAL_SAVED_SESSIONS[sid] = dict(row)
+
     engine = _get_engine()
     if not engine:
         return
@@ -396,6 +437,39 @@ def persist_session(row: Dict[str, Any]) -> None:
             conn.execute(text(sql), row)
     except Exception as exc:
         logger.warning(f"Failed to persist session to PostgreSQL: {exc}")
+
+
+def get_session_by_id(session_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Retrieve session by session_id from memory cache, PostgreSQL, or local stores."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+
+    # 1. Check local in-memory fallback dict
+    if sid in _LOCAL_SAVED_SESSIONS:
+        rec = _LOCAL_SAVED_SESSIONS[sid]
+        rec_uid = rec.get("user_id")
+        if user_id and rec_uid and rec_uid != user_id:
+            return None
+        return dict(rec)
+
+    # 2. Check PostgreSQL
+    engine = _get_engine()
+    if engine:
+        try:
+            sql = "SELECT * FROM app_sessions WHERE session_id = :sid"
+            params: Dict[str, Any] = {"sid": sid}
+            if user_id:
+                sql += " AND (user_id = :uid OR user_id IS NULL)"
+                params["uid"] = user_id
+            with engine.connect() as conn:
+                row = conn.execute(text(sql), params).mappings().first()
+                if row:
+                    return dict(row)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch session from PostgreSQL: {exc}")
+
+    return None
 
 
 def delete_session(session_id: str, user_id: Optional[str] = None) -> None:
@@ -744,3 +818,236 @@ def list_knowledge_documents(user_id: str, limit: int = 100) -> List[Dict[str, A
     except Exception as exc:
         logger.warning(f"Failed to list knowledge documents from PostgreSQL: {exc}")
         return []
+
+
+# ── Report Comparisons Persistence ──────────────────────────────────────────
+
+_LOCAL_COMPARISONS: Dict[str, Dict[str, Any]] = {}
+_LOCAL_MESSAGES: Dict[str, List[Dict[str, Any]]] = {}
+
+def save_report_comparison(comp: Dict[str, Any]) -> None:
+    """Save or update a report comparison in PostgreSQL with local memory fallback."""
+    comp_id = str(comp.get("comparison_id") or "").strip()
+    if not comp_id:
+        return
+
+    _LOCAL_COMPARISONS[comp_id] = dict(comp)
+
+    engine = _get_engine()
+    if not engine:
+        return
+
+    init_postgres_schema()
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO app_report_comparisons (
+                        comparison_id, owner_id, title,
+                        report_a_id, report_a_title, report_a_type,
+                        report_b_id, report_b_title, report_b_type,
+                        status, summary_json, analysis_json, sections_json, differences_json,
+                        created_at, updated_at
+                    ) VALUES (
+                        :comparison_id, :owner_id, :title,
+                        :report_a_id, :report_a_title, :report_a_type,
+                        :report_b_id, :report_b_title, :report_b_type,
+                        :status, :summary_json, :analysis_json, :sections_json, :differences_json,
+                        :created_at, :updated_at
+                    )
+                    ON CONFLICT (comparison_id) DO UPDATE SET
+                        title            = EXCLUDED.title,
+                        status           = EXCLUDED.status,
+                        summary_json     = EXCLUDED.summary_json,
+                        analysis_json    = EXCLUDED.analysis_json,
+                        sections_json    = EXCLUDED.sections_json,
+                        differences_json = EXCLUDED.differences_json,
+                        updated_at       = EXCLUDED.updated_at
+                """),
+                {
+                    "comparison_id": comp_id,
+                    "owner_id": str(comp.get("owner_id") or ""),
+                    "title": str(comp.get("title") or "Report Comparison"),
+                    "report_a_id": str(comp.get("report_a_id") or ""),
+                    "report_a_title": str(comp.get("report_a_title") or ""),
+                    "report_a_type": str(comp.get("report_a_type") or "uploaded"),
+                    "report_b_id": str(comp.get("report_b_id") or ""),
+                    "report_b_title": str(comp.get("report_b_title") or ""),
+                    "report_b_type": str(comp.get("report_b_type") or "generated"),
+                    "status": str(comp.get("status") or "completed"),
+                    "summary_json": json.dumps(comp.get("summary_json") or comp.get("summary") or {}),
+                    "analysis_json": json.dumps(comp.get("analysis_json") or comp.get("analysis") or {}),
+                    "sections_json": json.dumps(comp.get("sections_json") or comp.get("dimensions") or []),
+                    "differences_json": json.dumps(comp.get("differences_json") or comp.get("differences") or []),
+                    "created_at": str(comp.get("created_at") or datetime.now(timezone.utc).isoformat()),
+                    "updated_at": str(comp.get("updated_at") or datetime.now(timezone.utc).isoformat()),
+                },
+            )
+    except Exception as exc:
+        logger.warning(f"Failed to persist report comparison to PostgreSQL: {exc}")
+
+
+def get_report_comparison(comparison_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve a report comparison by ID, verifying ownership."""
+    # Check local cache first
+    local = _LOCAL_COMPARISONS.get(comparison_id)
+    if local and str(local.get("owner_id")) == str(owner_id):
+        return dict(local)
+
+    engine = _get_engine()
+    if not engine:
+        return local if local and str(local.get("owner_id")) == str(owner_id) else None
+
+    init_postgres_schema()
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM app_report_comparisons WHERE comparison_id = :cid AND owner_id = :oid"),
+                {"cid": comparison_id, "oid": owner_id},
+            ).mappings().first()
+            if not row:
+                return None
+            res = dict(row)
+            for k in ("summary_json", "analysis_json", "sections_json", "differences_json"):
+                if isinstance(res.get(k), str):
+                    try:
+                        res[k] = json.loads(res[k])
+                    except Exception:
+                        pass
+            _LOCAL_COMPARISONS[comparison_id] = res
+            return res
+    except Exception as exc:
+        logger.warning(f"Failed to load report comparison: {exc}")
+        return local if local and str(local.get("owner_id")) == str(owner_id) else None
+
+
+def list_report_comparisons(owner_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """List comparison sessions owned by the caller."""
+    engine = _get_engine()
+    comparisons: List[Dict[str, Any]] = []
+
+    if engine:
+        init_postgres_schema()
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    text("SELECT * FROM app_report_comparisons WHERE owner_id = :oid ORDER BY created_at DESC LIMIT :lim"),
+                    {"oid": owner_id, "lim": limit},
+                ).mappings().fetchall()
+                for r in rows:
+                    item = dict(r)
+                    for k in ("summary_json", "analysis_json", "sections_json", "differences_json"):
+                        if isinstance(item.get(k), str):
+                            try:
+                                item[k] = json.loads(item[k])
+                            except Exception:
+                                pass
+                    comparisons.append(item)
+                    _LOCAL_COMPARISONS[item["comparison_id"]] = item
+        except Exception as exc:
+            logger.warning(f"Failed to list comparisons from PostgreSQL: {exc}")
+
+    if not comparisons:
+        comparisons = [c for c in _LOCAL_COMPARISONS.values() if str(c.get("owner_id")) == str(owner_id)]
+        comparisons.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+
+    return comparisons[:limit]
+
+
+def delete_report_comparison(comparison_id: str, owner_id: str) -> bool:
+    """Delete a report comparison and its chat messages."""
+    _LOCAL_COMPARISONS.pop(comparison_id, None)
+    _LOCAL_MESSAGES.pop(comparison_id, None)
+
+    engine = _get_engine()
+    if not engine:
+        return True
+
+    init_postgres_schema()
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM app_comparison_messages WHERE comparison_id = :cid AND owner_id = :oid"),
+                {"cid": comparison_id, "oid": owner_id},
+            )
+            res = conn.execute(
+                text("DELETE FROM app_report_comparisons WHERE comparison_id = :cid AND owner_id = :oid"),
+                {"cid": comparison_id, "oid": owner_id},
+            )
+            return (res.rowcount or 0) > 0
+    except Exception as exc:
+        logger.warning(f"Failed to delete comparison from PostgreSQL: {exc}")
+        return True
+
+
+def save_comparison_message(msg: Dict[str, Any]) -> None:
+    """Save a chat message associated with a report comparison."""
+    comp_id = str(msg.get("comparison_id") or "").strip()
+    if not comp_id:
+        return
+
+    if comp_id not in _LOCAL_MESSAGES:
+        _LOCAL_MESSAGES[comp_id] = []
+    _LOCAL_MESSAGES[comp_id].append(dict(msg))
+
+    engine = _get_engine()
+    if not engine:
+        return
+
+    init_postgres_schema()
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO app_comparison_messages (
+                        message_id, comparison_id, owner_id, role, content, citations_json, created_at
+                    ) VALUES (
+                        :message_id, :comparison_id, :owner_id, :role, :content, :citations_json, :created_at
+                    )
+                """),
+                {
+                    "message_id": str(msg.get("message_id") or f"msg-{len(_LOCAL_MESSAGES[comp_id])}"),
+                    "comparison_id": comp_id,
+                    "owner_id": str(msg.get("owner_id") or ""),
+                    "role": str(msg.get("role") or "user"),
+                    "content": str(msg.get("content") or ""),
+                    "citations_json": json.dumps(msg.get("citations_json") or msg.get("citations") or []),
+                    "created_at": str(msg.get("created_at") or datetime.now(timezone.utc).isoformat()),
+                },
+            )
+    except Exception as exc:
+        logger.warning(f"Failed to persist comparison message to PostgreSQL: {exc}")
+
+
+def list_comparison_messages(comparison_id: str, owner_id: str) -> List[Dict[str, Any]]:
+    """List chat messages for a comparison session."""
+    local = _LOCAL_MESSAGES.get(comparison_id, [])
+
+    engine = _get_engine()
+    if not engine:
+        return [m for m in local if str(m.get("owner_id")) == str(owner_id)]
+
+    init_postgres_schema()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT * FROM app_comparison_messages WHERE comparison_id = :cid AND owner_id = :oid ORDER BY created_at ASC"),
+                {"cid": comparison_id, "oid": owner_id},
+            ).mappings().fetchall()
+            if rows:
+                res = []
+                for r in rows:
+                    item = dict(r)
+                    if isinstance(item.get("citations_json"), str):
+                        try:
+                            item["citations"] = json.loads(item["citations_json"])
+                        except Exception:
+                            item["citations"] = []
+                    res.append(item)
+                _LOCAL_MESSAGES[comparison_id] = res
+                return res
+    except Exception as exc:
+        logger.warning(f"Failed to list comparison messages from PostgreSQL: {exc}")
+
+    return [m for m in local if str(m.get("owner_id")) == str(owner_id)]
+

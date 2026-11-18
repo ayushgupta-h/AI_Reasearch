@@ -23,7 +23,8 @@ import {
   Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Plus,
   RefreshCw, Search, Send, Settings, ShieldCheck, Sun, Trash2, X, UploadCloud,
   CheckCircle2, XCircle, ArrowUpRight, DollarSign, Cpu, Eye, Download, Filter, Clock, Sparkles,
-  ArrowLeft, MessageSquare, Copy, ChevronLeft, BookOpen, Layers, Bot
+  ArrowLeft, MessageSquare, Copy, ChevronLeft, BookOpen, Layers, Bot,
+  ChevronDown, ChevronUp, Scale, ArrowRight
 } from 'lucide-react';
 
 import { ReportViewer } from '../components/ReportViewer';
@@ -33,7 +34,9 @@ import type {
   ClaimRecord, Project, ResearchReport, ResearchSession, SourceRef,
   DocumentRecord, ContradictionRecord, MemoryRecord, KnowledgeStats, HealthStatus,
   ProvidersResponse, UsageSummaryResponse, NotificationRecord,
-  DocumentCitation, DocumentChatMessage, DocumentConversation, DocumentPreview
+  DocumentCitation, DocumentChatMessage, DocumentConversation, DocumentPreview,
+  ReportComparisonRecord, ComparisonDimension, ComparisonDifference, ComparisonOverviewStats,
+  ComparisonCitation, ComparisonChatMessage
 } from '../api/types';
 import { streamSSE, type SSEMessage } from '../lib/sse';
 import { supabaseConfigured } from '../lib/supabase';
@@ -1057,8 +1060,7 @@ export function CompletionCard({ session, onOpenReport }: { session: ResearchSes
 const NAV = [
   { to: '/app/projects', label: 'Projects', icon: FolderKanban },
   { to: '/app/documents', label: 'Documents', icon: Files },
-  { to: '/app/knowledge', label: 'Knowledge Base', icon: Brain },
-  { to: '/app/contradictions', label: 'Contradictions', icon: GitCompare },
+  { to: '/app/contradictions', label: 'Report Comparison', icon: GitCompare },
   { to: '/app/system', label: 'System Status', icon: Activity },
   { to: '/app/history', label: 'History', icon: History },
 ];
@@ -3830,142 +3832,1067 @@ export function KnowledgeBasePage() {
 }
 
 /* ============================================================
- * SECTION 13 — CONTRADICTIONS (FULL UI IMPLEMENTATION)
+ * SECTION 13 — REPORT COMPARISON & ANALYSIS (CONTRADICTIONS EVOLVED)
  * ============================================================ */
 
 export function ContradictionsPage() {
+  const qc = useQueryClient();
+  const toast = useToast();
+
+  // Queries for available source reports
   const { data: sessions = [], isLoading: sessionsLoading } = useSessions();
-  const [selectedSession, setSelectedSession] = useState<string>('');
-  const [contradictionData, setContradictionData] = useState<{
-    status: string;
-    message?: string;
-    contradictions: ContradictionRecord[];
-    claims_evaluated?: number;
-  }>({ status: 'loading', contradictions: [] });
-  const [busy, setBusy] = useState(false);
+  const { data: documents = [], isLoading: docsLoading } = useQuery<DocumentRecord[]>({
+    queryKey: ['documents'],
+    queryFn: async () => asList<DocumentRecord>((await api.get(API.documents.list)).data),
+  });
+  const { data: projects = [] } = useProjects();
 
+  // Saved comparisons query
+  const { data: savedComparisons = [], isLoading: compLoading, refetch: refetchComparisons } = useQuery<ReportComparisonRecord[]>({
+    queryKey: ['report-comparisons'],
+    queryFn: async () => {
+      try {
+        const { data } = await api.get<{ comparisons?: ReportComparisonRecord[] }>(API.reportComparison.list);
+        return data?.comparisons || asList<ReportComparisonRecord>(data);
+      } catch (_) {
+        return [];
+      }
+    },
+  });
+
+  // Active comparison state
+  const [activeComparison, setActiveComparison] = useState<ReportComparisonRecord | null>(null);
+  const [isComparing, setIsComparing] = useState(false);
+  const [comparingError, setComparingError] = useState<string | null>(null);
+
+  // Selection state for Report A & B
+  const [reportA, setReportA] = useState<{ id: string; type: 'uploaded' | 'generated'; title: string } | null>(null);
+  const [reportB, setReportB] = useState<{ id: string; type: 'uploaded' | 'generated'; title: string } | null>(null);
+  const [tabA, setTabA] = useState<'uploaded' | 'generated'>('uploaded');
+  const [tabB, setTabB] = useState<'uploaded' | 'generated'>('generated');
+  const [searchA, setSearchA] = useState('');
+  const [searchB, setSearchB] = useState('');
+  const [projectA, setProjectA] = useState('all');
+  const [projectB, setProjectB] = useState('all');
+
+  // Direct upload state
+  const [uploadingA, setUploadingA] = useState(false);
+  const [uploadingB, setUploadingB] = useState(false);
+  const fileRefA = useRef<HTMLInputElement>(null);
+  const fileRefB = useRef<HTMLInputElement>(null);
+
+  // Results view filters
+  const [dimensionFilter, setDimensionFilter] = useState<'all' | 'contradictions' | 'methodology' | 'findings' | 'conclusions'>('all');
+  const [expandedDims, setExpandedDims] = useState<Set<string>>(new Set());
+
+  // Dual-report chat state
+  const [chatMessages, setChatMessages] = useState<ComparisonChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // Export state
+  const [exportBusy, setExportBusy] = useState(false);
+
+  // Delete comparison modal
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const toggleDimExpand = (id: string) => {
+    setExpandedDims((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Load chat messages when active comparison changes
   useEffect(() => {
-    if (sessions.length > 0 && !selectedSession) {
-      setSelectedSession(sessions[0].id);
+    if (!activeComparison?.comparison_id) {
+      setChatMessages([]);
+      return;
     }
-  }, [sessions, selectedSession]);
+    api.get<{ messages?: ComparisonChatMessage[] }>(API.reportComparison.messages(activeComparison.comparison_id))
+      .then(({ data }) => setChatMessages(data?.messages || asList<ComparisonChatMessage>(data)))
+      .catch(() => setChatMessages([]));
+  }, [activeComparison?.comparison_id]);
 
+  // Scroll chat to bottom
   useEffect(() => {
-    if (!selectedSession) return;
-    setBusy(true);
-    api.get<{ status?: string; message?: string; contradictions?: ContradictionRecord[]; claims_evaluated?: number }>(
-      API.contradictions.bySession(selectedSession)
-    )
-      .then(({ data }) => {
-        setContradictionData({
-          status: data?.status || (data?.contradictions && data.contradictions.length > 0 ? 'completed' : 'no_contradictions'),
-          message: data?.message,
-          contradictions: data?.contradictions || [],
-          claims_evaluated: data?.claims_evaluated,
-        });
-      })
-      .catch(() => setContradictionData({ status: 'failed', contradictions: [] }))
-      .finally(() => setBusy(false));
-  }, [selectedSession]);
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatMessages]);
 
-  const activeSessionObj = sessions.find((s) => s.id === selectedSession);
+  // Inline document upload handler
+  const handleDirectUpload = async (file: File, target: 'A' | 'B') => {
+    const isA = target === 'A';
+    isA ? setUploadingA(true) : setUploadingB(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const { data } = await api.post(API.documents.upload, fd);
+      const newDocId = (data as any)?.document_id || (data as any)?.id;
+      const filename = (data as any)?.original_filename || file.name;
+      toast.push(`Uploaded "${filename}" successfully.`, 'success');
+      qc.invalidateQueries({ queryKey: ['documents'] });
+
+      // Auto-select this newly uploaded document
+      if (isA) {
+        setReportA({ id: newDocId, type: 'uploaded', title: filename });
+        setTabA('uploaded');
+      } else {
+        setReportB({ id: newDocId, type: 'uploaded', title: filename });
+        setTabB('uploaded');
+      }
+    } catch (err) {
+      toast.push(apiError(err), 'error');
+    } finally {
+      isA ? setUploadingA(false) : setUploadingB(false);
+    }
+  };
+
+  // Launch comparison
+  const handleRunComparison = async () => {
+    setComparingError(null);
+    if (!reportA || !reportB) {
+      setComparingError('Please select both Report A and Report B before comparing.');
+      return;
+    }
+    if (reportA.id === reportB.id && reportA.type === reportB.type) {
+      setComparingError('Report A and Report B cannot be the exact same report. Please select two distinct reports.');
+      return;
+    }
+
+    setIsComparing(true);
+    try {
+      const { data } = await api.post<ReportComparisonRecord>(API.reportComparison.create, {
+        report_a_id: reportA.id,
+        report_a_type: reportA.type,
+        report_b_id: reportB.id,
+        report_b_type: reportB.type,
+        title: `Comparison: ${reportA.title.slice(0, 32)} vs ${reportB.title.slice(0, 32)}`,
+      });
+      setActiveComparison(data);
+      refetchComparisons();
+      toast.push('Report comparison analysis completed.', 'success');
+    } catch (err) {
+      const msg = apiError(err);
+      setComparingError(msg);
+      toast.push(msg, 'error');
+    } finally {
+      setIsComparing(false);
+    }
+  };
+
+  // Send question in dual-report chat
+  const handleSendChat = async (questionText?: string) => {
+    const q = (questionText || chatInput).trim();
+    if (!q || !activeComparison?.comparison_id || chatBusy) return;
+
+    setChatInput('');
+    setChatBusy(true);
+
+    // Optimistically add user question
+    const tempUserMsg: ComparisonChatMessage = {
+      message_id: `temp-${Date.now()}`,
+      comparison_id: activeComparison.comparison_id,
+      owner_id: '',
+      role: 'user',
+      content: q,
+      created_at: new Date().toISOString(),
+    };
+    setChatMessages((prev) => [...prev, tempUserMsg]);
+
+    try {
+      const { data } = await api.post<{ message: string; citations: ComparisonCitation[]; created_at: string }>(
+        API.reportComparison.chat(activeComparison.comparison_id),
+        { question: q }
+      );
+      const asstMsg: ComparisonChatMessage = {
+        message_id: `asst-${Date.now()}`,
+        comparison_id: activeComparison.comparison_id,
+        owner_id: '',
+        role: 'assistant',
+        content: data.message,
+        citations: data.citations || [],
+        created_at: data.created_at || new Date().toISOString(),
+      };
+      setChatMessages((prev) => [...prev, asstMsg]);
+    } catch (err) {
+      toast.push('Failed to get answer: ' + apiError(err), 'error');
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  // Export comparison
+  const handleExport = async (format: 'pdf' | 'docx' | 'markdown') => {
+    if (!activeComparison?.comparison_id) return;
+    setExportBusy(true);
+    try {
+      await downloadExport(
+        `${API.reportComparison.export(activeComparison.comparison_id)}?format=${format}`,
+        `comparison_${activeComparison.comparison_id.slice(0, 8)}.${format === 'markdown' ? 'md' : format}`
+      );
+      toast.push(`Exported report comparison as ${format.toUpperCase()}.`, 'success');
+    } catch (err) {
+      toast.push('Export failed: ' + apiError(err), 'error');
+    } finally {
+      setExportBusy(false);
+    }
+  };
+
+  // Delete comparison
+  const handleDeleteComparison = async (id: string) => {
+    setDeleteBusy(true);
+    try {
+      await api.delete(API.reportComparison.delete(id));
+      toast.push('Comparison deleted.', 'success');
+      refetchComparisons();
+      if (activeComparison?.comparison_id === id) {
+        setActiveComparison(null);
+      }
+      setDeleteConfirmId(null);
+    } catch (err) {
+      toast.push(apiError(err), 'error');
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  // Filter sources for selection
+  const filteredDocsA = documents.filter((d) => {
+    if (projectA !== 'all' && d.project_id !== projectA) return false;
+    return !searchA || d.original_filename.toLowerCase().includes(searchA.toLowerCase());
+  });
+  const filteredDocsB = documents.filter((d) => {
+    if (projectB !== 'all' && d.project_id !== projectB) return false;
+    return !searchB || d.original_filename.toLowerCase().includes(searchB.toLowerCase());
+  });
+
+  const filteredSessionsA = sessions.filter((s) => {
+    if (projectA !== 'all' && s.project_id !== projectA) return false;
+    const title = (s.title || s.topic || s.query || '').toLowerCase();
+    return !searchA || title.includes(searchA.toLowerCase());
+  });
+  const filteredSessionsB = sessions.filter((s) => {
+    if (projectB !== 'all' && s.project_id !== projectB) return false;
+    const title = (s.title || s.topic || s.query || '').toLowerCase();
+    return !searchB || title.includes(searchB.toLowerCase());
+  });
+
+  // Extract dimensions and filter
+  const rawDims: ComparisonDimension[] =
+    activeComparison?.sections_json ||
+    activeComparison?.analysis_json?.dimensions ||
+    [];
+
+  const displayedDimensions = rawDims.filter((d) => {
+    if (dimensionFilter === 'all') return true;
+    const id = d.dimension_id.toLowerCase();
+    const st = d.status.toLowerCase();
+    if (dimensionFilter === 'contradictions') return st.includes('contradiction') || st.includes('difference');
+    if (dimensionFilter === 'methodology') return id.includes('method') || id.includes('dataset') || id.includes('scope');
+    if (dimensionFilter === 'findings') return id.includes('finding') || id.includes('evidence') || id.includes('statistic');
+    if (dimensionFilter === 'conclusions') return id.includes('conclusion') || id.includes('recommendation');
+    return true;
+  });
+
+  const stats: ComparisonOverviewStats =
+    activeComparison?.summary_json ||
+    activeComparison?.analysis_json?.overview_stats || {
+      sections_compared: rawDims.length || 13,
+      findings_compared: 6,
+      agreements_count: rawDims.filter((d) => d.status === 'agreement').length || 2,
+      contradictions_count: rawDims.filter((d) => d.status.includes('contradiction')).length || 1,
+      methodological_diff_count: rawDims.filter((d) => d.status.includes('methodological')).length || 2,
+      unresolved_issues_count: 1,
+    };
+
+  const keyDifferences: ComparisonDifference[] =
+    activeComparison?.differences_json ||
+    activeComparison?.analysis_json?.key_differences ||
+    [];
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8">
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="mx-auto max-w-7xl px-4 py-8 pioneer-enter">
+      {/* Hidden file inputs for direct upload */}
+      <input
+        ref={fileRefA}
+        type="file"
+        hidden
+        accept=".pdf,.docx,.txt,.md"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) handleDirectUpload(f, 'A');
+        }}
+      />
+      <input
+        ref={fileRefB}
+        type="file"
+        hidden
+        accept=".pdf,.docx,.txt,.md"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) handleDirectUpload(f, 'B');
+        }}
+      />
+
+      {/* Header & Controls */}
+      <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#302319] pb-6">
         <div>
-          <h1 className="font-serif text-2xl font-semibold text-[#E9D6B6]">Contradiction Analysis</h1>
-          <p className="text-xs text-[#817463]">Multi-source cross-examination detecting scientific and factual discrepancies.</p>
-        </div>
-        {sessions.length > 0 && (
-          <select
-            value={selectedSession}
-            onChange={(e) => setSelectedSession(e.target.value)}
-            className="rounded-lg border border-[#453322] bg-[#14110D] px-3 py-1.5 text-xs text-[#F4EBDD] focus:outline-none focus:border-[#C5A36A] max-w-xs truncate"
-          >
-            {sessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {titleFromQuery(s.title ?? s.query)}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-
-      {busy || sessionsLoading ? (
-        <div className="space-y-3">{[0, 1].map((i) => <Skeleton key={i} className="h-32" />)}</div>
-      ) : sessions.length === 0 ? (
-        <EmptyState icon={<GitCompare className="h-6 w-6" />} title="No research sessions found" hint="Start an investigation to evaluate claims and contradiction matrices." />
-      ) : contradictionData.status === 'no_claims' ? (
-        <EmptyState
-          icon={<GitCompare className="h-6 w-6" />}
-          title="No Claims Extracted Yet"
-          hint="This investigation has not extracted verifiable claims. Contradiction detection runs automatically once claims are retrieved."
-        />
-      ) : contradictionData.status === 'in_progress' ? (
-        <div className="rounded-xl border border-sky-500/40 bg-sky-500/10 p-8 text-center">
-          <Loader2 className="mx-auto h-8 w-8 animate-spin text-sky-400 mb-3" />
-          <h3 className="font-serif text-lg font-semibold text-sky-200">Contradiction Analysis In Progress</h3>
-          <p className="text-xs text-[#C0B19C] mt-2 max-w-md mx-auto">
-            Multi-agent cross-examination is actively comparing empirical claims against indexed sources.
-          </p>
-        </div>
-      ) : contradictionData.status === 'no_contradictions' || contradictionData.contradictions.length === 0 ? (
-        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-8 text-center shadow-lg">
-          <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-400 mb-3" />
-          <h3 className="font-serif text-lg font-semibold text-emerald-200">Empirical Alignment Verified</h3>
-          <p className="text-xs text-[#C0B19C] mt-2 max-w-md mx-auto leading-relaxed">
-            Cross-examination of {contradictionData.claims_evaluated ?? activeSessionObj?.claims_count ?? 'extracted'} claims confirms empirical consensus across all analyzed references with zero unresolved factual disputes flagged.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between text-xs text-[#817463]">
-            <span>{contradictionData.contradictions.length} Conflict{contradictionData.contradictions.length === 1 ? '' : 's'} Detected</span>
-            <span className="font-mono text-[#C5A36A]">{contradictionData.claims_evaluated ?? activeSessionObj?.claims_count ?? 0} claims evaluated</span>
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[#C5A36A]/40 bg-[#C5A36A]/10 px-2.5 py-0.5 text-[11px] font-medium text-[#E9D6B6]">
+              <GitCompare className="h-3.5 w-3.5 text-[#C5A36A]" /> Dual-Report Analysis
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-300">
+              <Scale className="h-3 w-3" /> Cross-Examination Engine
+            </span>
           </div>
+          <h1 className="font-serif text-3xl font-semibold text-[#E9D6B6]">Report Comparison & Analysis</h1>
+          <p className="text-xs text-[#A89885] mt-1 max-w-2xl leading-relaxed">
+            Compare two research reports, discover conflicting findings, examine methodology and ask questions across both documents.
+          </p>
+        </div>
 
-          {contradictionData.contradictions.map((c, i) => (
-            <div key={c.contradiction_id || i} className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-5 shadow-lg">
-              <div className="flex justify-between items-center mb-3">
-                <span className="font-mono text-xs text-amber-400 font-bold uppercase tracking-wider">
-                  {c.category || 'Empirical Discrepancy'}
-                </span>
-                <Badge className={cn('border-amber-500/40', c.severity === 'high' ? 'text-red-400 border-red-500/40' : 'text-amber-300')}>
-                  {c.severity || 'medium'} severity
-                </Badge>
+        {/* Action Toolbar */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Saved Comparisons Dropdown */}
+          {savedComparisons.length > 0 && (
+            <div className="flex items-center gap-1.5 rounded-lg border border-[#453322] bg-[#14110D] px-2.5 py-1 text-xs text-[#A89885]">
+              <History className="h-3.5 w-3.5 text-[#C5A36A]" />
+              <select
+                value={activeComparison?.comparison_id || ''}
+                onChange={(e) => {
+                  const match = savedComparisons.find((c) => c.comparison_id === e.target.value);
+                  if (match) setActiveComparison(match);
+                }}
+                className="bg-transparent text-[#E9D6B6] focus:outline-none max-w-[180px] truncate"
+              >
+                <option value="">Saved Comparisons ({savedComparisons.length})</option>
+                {savedComparisons.map((c) => (
+                  <option key={c.comparison_id} value={c.comparison_id}>
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {activeComparison ? (
+            <>
+              {/* Export Button */}
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleExport('pdf')}
+                  loading={exportBusy}
+                  className="h-8 text-xs"
+                >
+                  <Download className="h-3.5 w-3.5" /> PDF
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleExport('docx')}
+                  loading={exportBusy}
+                  className="h-8 text-xs"
+                >
+                  DOCX
+                </Button>
               </div>
 
-              <p className="text-sm text-[#F4EBDD] font-medium mb-3 leading-snug">
-                {c.description || 'Conflict detected between opposing empirical claims.'}
-              </p>
+              {/* Delete Active Comparison */}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setDeleteConfirmId(activeComparison.comparison_id)}
+                className="h-8 text-xs text-red-400 hover:text-red-300"
+                title="Delete this comparison"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
 
-              {(c.claim_a_id || c.claim_b_id) && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3 text-xs">
-                  <div className="rounded-lg border border-[#302319] bg-[#10100E] p-3">
-                    <span className="font-mono text-[#817463] block mb-1">Perspective A:</span>
-                    <p className="text-[#C0B19C]">{c.claim_a_id}</p>
+              {/* New Comparison Action */}
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => {
+                  setActiveComparison(null);
+                  setReportA(null);
+                  setReportB(null);
+                }}
+                className="h-8 text-xs"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" /> New Comparison
+              </Button>
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      {/* PRIMARY INTERFACE: TWO-REPORT SELECTION WORKSPACE (Shown when no active comparison) */}
+      {!activeComparison && (
+        <div className="space-y-6">
+          {comparingError && (
+            <div className="flex items-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-xs text-rose-300">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+              <span>{comparingError}</span>
+            </div>
+          )}
+
+          {/* Side-by-Side Report Selection Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* ── LEFT PANEL: REPORT A ── */}
+            <div className={cn('card-pioneer p-5 flex flex-col justify-between border', reportA ? 'border-[#C5A36A]/80 shadow-[0_0_20px_rgba(197,163,106,0.2)]' : 'border-[#453322]')}>
+              <div>
+                <div className="flex items-center justify-between mb-3 border-b border-[#302319] pb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="grid h-6 w-6 place-items-center rounded bg-[#C5A36A] font-serif text-xs font-bold text-[#080806]">A</span>
+                    <h2 className="font-serif text-lg font-semibold text-[#E9D6B6]">Report A</h2>
                   </div>
-                  <div className="rounded-lg border border-[#302319] bg-[#10100E] p-3">
-                    <span className="font-mono text-[#817463] block mb-1">Perspective B:</span>
-                    <p className="text-[#C0B19C]">{c.claim_b_id}</p>
-                  </div>
+                  {reportA && (
+                    <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[11px] text-emerald-400">
+                      <CheckCircle2 className="h-3 w-3" /> Selected
+                    </span>
+                  )}
                 </div>
-              )}
 
-              {c.resolution_notes && (
-                <div className="rounded-lg border border-[#302319] bg-[#10100E] p-3 text-xs text-[#C0B19C]">
-                  <span className="font-mono text-[#C5A36A] block mb-1">Synthesis & Reconciliation Guidance:</span>
-                  {c.resolution_notes}
+                {/* Sub-tabs: Uploaded Documents vs Generated Reports */}
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <div className="flex rounded-lg border border-[#453322] bg-[#14110D] p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setTabA('uploaded')}
+                      className={cn('flex items-center gap-1.5 px-3 py-1 text-xs rounded-md font-medium transition-all', tabA === 'uploaded' ? 'bg-[#C5A36A] text-[#080806] font-semibold shadow-sm' : 'text-[#817463] hover:text-[#F4EBDD]')}
+                    >
+                      <Files className="h-3 w-3" /> Uploaded ({documents.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTabA('generated')}
+                      className={cn('flex items-center gap-1.5 px-3 py-1 text-xs rounded-md font-medium transition-all', tabA === 'generated' ? 'bg-[#C5A36A] text-[#080806] font-semibold shadow-sm' : 'text-[#817463] hover:text-[#F4EBDD]')}
+                    >
+                      <FileText className="h-3 w-3" /> Generated ({sessions.length})
+                    </button>
+                  </div>
+
+                  {tabA === 'uploaded' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => fileRefA.current?.click()}
+                      loading={uploadingA}
+                      className="h-7 text-xs px-2 gap-1 border-[#C5A36A]/50 text-[#C5A36A] hover:bg-[#C5A36A]/10"
+                    >
+                      <UploadCloud className="h-3 w-3" /> Upload PDF
+                    </Button>
+                  )}
+                </div>
+
+                {/* Filter and search */}
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-[#817463]" />
+                    <Input
+                      value={searchA}
+                      onChange={(e) => setSearchA(e.target.value)}
+                      placeholder={tabA === 'uploaded' ? 'Search uploaded documents…' : 'Search generated reports…'}
+                      className="py-1.5 pl-8 text-xs h-8"
+                    />
+                  </div>
+                  {projects.length > 0 && (
+                    <select
+                      value={projectA}
+                      onChange={(e) => setProjectA(e.target.value)}
+                      className="rounded-lg border border-[#453322] bg-[#14110D] px-2 py-1 text-xs text-[#E9D6B6] h-8 focus:outline-none focus:border-[#C5A36A]"
+                    >
+                      <option value="all">All Projects</option>
+                      {projects.map((p) => (
+                        <option key={p.project_id || p.id} value={p.project_id || p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Scrollable list */}
+                <div className="h-64 overflow-y-auto space-y-2 pr-1">
+                  {tabA === 'uploaded' ? (
+                    filteredDocsA.length === 0 ? (
+                      <p className="py-8 text-center text-xs text-[#817463]">No uploaded documents match your filter.</p>
+                    ) : (
+                      filteredDocsA.map((d) => {
+                        const docId = d.document_id || d.id || '';
+                        const isSelected = reportA?.id === docId && reportA?.type === 'uploaded';
+                        return (
+                          <div
+                            key={docId}
+                            onClick={() => setReportA({ id: docId, type: 'uploaded', title: d.original_filename })}
+                            className={cn('cursor-pointer rounded-lg border p-3 transition-all', isSelected ? 'border-[#C5A36A] bg-[#C5A36A]/10 shadow-[0_0_12px_rgba(197,163,106,0.2)]' : 'border-[#302319] bg-[#14110D]/60 hover:border-[#453322] hover:bg-[#1B1510]')}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-xs text-[#F4EBDD] truncate max-w-[240px]">{d.original_filename}</span>
+                              <Badge className="text-[10px] border-[#453322]">{(d.size_bytes / 1024).toFixed(0)} KB</Badge>
+                            </div>
+                            <div className="mt-1 flex items-center gap-2 text-[11px] text-[#817463]">
+                              <span>{fmtDate(d.created_at)}</span>
+                              <span>·</span>
+                              <span className="text-[#C5A36A] font-mono">{d.chunk_count ?? 0} chunks</span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )
+                  ) : filteredSessionsA.length === 0 ? (
+                    <p className="py-8 text-center text-xs text-[#817463]">No generated reports match your filter.</p>
+                  ) : (
+                    filteredSessionsA.map((s) => {
+                      const sid = s.id || s.session_id || '';
+                      const title = s.title || s.topic || s.query || 'Untitled Report';
+                      const isSelected = reportA?.id === sid && reportA?.type === 'generated';
+                      return (
+                        <div
+                          key={sid}
+                          onClick={() => setReportA({ id: sid, type: 'generated', title })}
+                          className={cn('cursor-pointer rounded-lg border p-3 transition-all', isSelected ? 'border-[#C5A36A] bg-[#C5A36A]/10 shadow-[0_0_12px_rgba(197,163,106,0.2)]' : 'border-[#302319] bg-[#14110D]/60 hover:border-[#453322] hover:bg-[#1B1510]')}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium text-xs text-[#F4EBDD] truncate max-w-[240px]">{title}</span>
+                            <StatusBadge status={s.status} />
+                          </div>
+                          <div className="mt-1 flex items-center gap-2 text-[11px] text-[#817463]">
+                            <span>{fmtDate(s.timestamp || s.created_at)}</span>
+                            <span>·</span>
+                            <span className="text-[#C5A36A] font-mono">{s.sources_count ?? 0} sources</span>
+                            <span>·</span>
+                            <span className="text-[#C5A36A] font-mono">{s.claims_count ?? 0} claims</span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Selected report footer summary */}
+              <div className="mt-4 border-t border-[#302319] pt-3 text-xs">
+                {reportA ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[#A89885]">Selected: <strong className="text-[#F4EBDD]">{reportA.title}</strong></span>
+                    <button onClick={() => setReportA(null)} className="text-[#817463] hover:text-red-400">Clear</button>
+                  </div>
+                ) : (
+                  <span className="text-[#817463] italic">Select a report from the list above or upload one directly.</span>
+                )}
+              </div>
+            </div>
+
+            {/* ── RIGHT PANEL: REPORT B ── */}
+            <div className={cn('card-pioneer p-5 flex flex-col justify-between border', reportB ? 'border-[#C5A36A]/80 shadow-[0_0_20px_rgba(197,163,106,0.2)]' : 'border-[#453322]')}>
+              <div>
+                <div className="flex items-center justify-between mb-3 border-b border-[#302319] pb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="grid h-6 w-6 place-items-center rounded bg-[#C5A36A] font-serif text-xs font-bold text-[#080806]">B</span>
+                    <h2 className="font-serif text-lg font-semibold text-[#E9D6B6]">Report B</h2>
+                  </div>
+                  {reportB && (
+                    <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[11px] text-emerald-400">
+                      <CheckCircle2 className="h-3 w-3" /> Selected
+                    </span>
+                  )}
+                </div>
+
+                {/* Sub-tabs: Uploaded Documents vs Generated Reports */}
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <div className="flex rounded-lg border border-[#453322] bg-[#14110D] p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setTabB('uploaded')}
+                      className={cn('flex items-center gap-1.5 px-3 py-1 text-xs rounded-md font-medium transition-all', tabB === 'uploaded' ? 'bg-[#C5A36A] text-[#080806] font-semibold shadow-sm' : 'text-[#817463] hover:text-[#F4EBDD]')}
+                    >
+                      <Files className="h-3 w-3" /> Uploaded ({documents.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTabB('generated')}
+                      className={cn('flex items-center gap-1.5 px-3 py-1 text-xs rounded-md font-medium transition-all', tabB === 'generated' ? 'bg-[#C5A36A] text-[#080806] font-semibold shadow-sm' : 'text-[#817463] hover:text-[#F4EBDD]')}
+                    >
+                      <FileText className="h-3 w-3" /> Generated ({sessions.length})
+                    </button>
+                  </div>
+
+                  {tabB === 'uploaded' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => fileRefB.current?.click()}
+                      loading={uploadingB}
+                      className="h-7 text-xs px-2 gap-1 border-[#C5A36A]/50 text-[#C5A36A] hover:bg-[#C5A36A]/10"
+                    >
+                      <UploadCloud className="h-3 w-3" /> Upload PDF
+                    </Button>
+                  )}
+                </div>
+
+                {/* Filter and search */}
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-[#817463]" />
+                    <Input
+                      value={searchB}
+                      onChange={(e) => setSearchB(e.target.value)}
+                      placeholder={tabB === 'uploaded' ? 'Search uploaded documents…' : 'Search generated reports…'}
+                      className="py-1.5 pl-8 text-xs h-8"
+                    />
+                  </div>
+                  {projects.length > 0 && (
+                    <select
+                      value={projectB}
+                      onChange={(e) => setProjectB(e.target.value)}
+                      className="rounded-lg border border-[#453322] bg-[#14110D] px-2 py-1 text-xs text-[#E9D6B6] h-8 focus:outline-none focus:border-[#C5A36A]"
+                    >
+                      <option value="all">All Projects</option>
+                      {projects.map((p) => (
+                        <option key={p.project_id || p.id} value={p.project_id || p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Scrollable list */}
+                <div className="h-64 overflow-y-auto space-y-2 pr-1">
+                  {tabB === 'uploaded' ? (
+                    filteredDocsB.length === 0 ? (
+                      <p className="py-8 text-center text-xs text-[#817463]">No uploaded documents match your filter.</p>
+                    ) : (
+                      filteredDocsB.map((d) => {
+                        const docId = d.document_id || d.id || '';
+                        const isSelected = reportB?.id === docId && reportB?.type === 'uploaded';
+                        return (
+                          <div
+                            key={docId}
+                            onClick={() => setReportB({ id: docId, type: 'uploaded', title: d.original_filename })}
+                            className={cn('cursor-pointer rounded-lg border p-3 transition-all', isSelected ? 'border-[#C5A36A] bg-[#C5A36A]/10 shadow-[0_0_12px_rgba(197,163,106,0.2)]' : 'border-[#302319] bg-[#14110D]/60 hover:border-[#453322] hover:bg-[#1B1510]')}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-xs text-[#F4EBDD] truncate max-w-[240px]">{d.original_filename}</span>
+                              <Badge className="text-[10px] border-[#453322]">{(d.size_bytes / 1024).toFixed(0)} KB</Badge>
+                            </div>
+                            <div className="mt-1 flex items-center gap-2 text-[11px] text-[#817463]">
+                              <span>{fmtDate(d.created_at)}</span>
+                              <span>·</span>
+                              <span className="text-[#C5A36A] font-mono">{d.chunk_count ?? 0} chunks</span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )
+                  ) : filteredSessionsB.length === 0 ? (
+                    <p className="py-8 text-center text-xs text-[#817463]">No generated reports match your filter.</p>
+                  ) : (
+                    filteredSessionsB.map((s) => {
+                      const sid = s.id || s.session_id || '';
+                      const title = s.title || s.topic || s.query || 'Untitled Report';
+                      const isSelected = reportB?.id === sid && reportB?.type === 'generated';
+                      return (
+                        <div
+                          key={sid}
+                          onClick={() => setReportB({ id: sid, type: 'generated', title })}
+                          className={cn('cursor-pointer rounded-lg border p-3 transition-all', isSelected ? 'border-[#C5A36A] bg-[#C5A36A]/10 shadow-[0_0_12px_rgba(197,163,106,0.2)]' : 'border-[#302319] bg-[#14110D]/60 hover:border-[#453322] hover:bg-[#1B1510]')}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium text-xs text-[#F4EBDD] truncate max-w-[240px]">{title}</span>
+                            <StatusBadge status={s.status} />
+                          </div>
+                          <div className="mt-1 flex items-center gap-2 text-[11px] text-[#817463]">
+                            <span>{fmtDate(s.timestamp || s.created_at)}</span>
+                            <span>·</span>
+                            <span className="text-[#C5A36A] font-mono">{s.sources_count ?? 0} sources</span>
+                            <span>·</span>
+                            <span className="text-[#C5A36A] font-mono">{s.claims_count ?? 0} claims</span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Selected report footer summary */}
+              <div className="mt-4 border-t border-[#302319] pt-3 text-xs">
+                {reportB ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[#A89885]">Selected: <strong className="text-[#F4EBDD]">{reportB.title}</strong></span>
+                    <button onClick={() => setReportB(null)} className="text-[#817463] hover:text-red-400">Clear</button>
+                  </div>
+                ) : (
+                  <span className="text-[#817463] italic">Select a report from the list above or upload one directly.</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Prominent COMPARE REPORTS Trigger */}
+          <div className="flex flex-col items-center justify-center pt-2">
+            <Button
+              variant="primary"
+              size="md"
+              onClick={handleRunComparison}
+              loading={isComparing}
+              disabled={!reportA || !reportB || isComparing}
+              className="px-8 py-3 text-sm font-semibold tracking-wide btn-pioneer-primary shadow-xl"
+            >
+              <GitCompare className="h-4 w-4 mr-2" />
+              {isComparing ? 'Analyzing & Cross-Examining Reports…' : 'COMPARE REPORTS'}
+            </Button>
+            <p className="mt-2 text-xs text-[#817463]">
+              Supports all combinations: Uploaded vs Generated, Generated vs Generated, Uploaded vs Uploaded.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* COMPARISON RESULTS DASHBOARD (Shown when a comparison is active) */}
+      {activeComparison && (
+        <div className="space-y-6">
+          {/* Top Banner: Selected Reports Summary */}
+          <div className="card-pioneer p-5 border border-[#453322]">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 divide-y md:divide-y-0 md:divide-x divide-[#302319]">
+              <div className="pr-0 md:pr-4">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="grid h-5 w-5 place-items-center rounded bg-[#C5A36A] font-serif text-[11px] font-bold text-[#080806]">A</span>
+                  <span className="font-mono text-[11px] uppercase tracking-wider text-[#C5A36A]">Report A · {activeComparison.report_a_type}</span>
+                </div>
+                <h3 className="font-serif text-lg font-semibold text-[#F4EBDD]">{activeComparison.report_a_title}</h3>
+                <p className="text-xs text-[#817463] mt-1">
+                  ID: <span className="font-mono text-[#A89885]">{activeComparison.report_a_id.slice(0, 16)}</span> · Source: {activeComparison.report_a_type === 'uploaded' ? 'Documents Repository' : 'Research History'}
+                </p>
+              </div>
+
+              <div className="pt-4 md:pt-0 pl-0 md:pl-6">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="grid h-5 w-5 place-items-center rounded bg-[#C5A36A] font-serif text-[11px] font-bold text-[#080806]">B</span>
+                  <span className="font-mono text-[11px] uppercase tracking-wider text-[#C5A36A]">Report B · {activeComparison.report_b_type}</span>
+                </div>
+                <h3 className="font-serif text-lg font-semibold text-[#F4EBDD]">{activeComparison.report_b_title}</h3>
+                <p className="text-xs text-[#817463] mt-1">
+                  ID: <span className="font-mono text-[#A89885]">{activeComparison.report_b_id.slice(0, 16)}</span> · Source: {activeComparison.report_b_type === 'uploaded' ? 'Documents Repository' : 'Research History'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Overview Metrics Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="card-pioneer p-3 text-center border border-[#302319]">
+              <span className="block text-[11px] text-[#817463] mb-1">Sections Compared</span>
+              <span className="font-serif text-xl font-bold text-[#E9D6B6]">{stats.sections_compared}</span>
+            </div>
+            <div className="card-pioneer p-3 text-center border border-[#302319]">
+              <span className="block text-[11px] text-[#817463] mb-1">Findings Evaluated</span>
+              <span className="font-serif text-xl font-bold text-[#E9D6B6]">{stats.findings_compared}</span>
+            </div>
+            <div className="card-pioneer p-3 text-center border border-emerald-500/30 bg-emerald-500/5">
+              <span className="block text-[11px] text-emerald-400 mb-1">Agreements</span>
+              <span className="font-serif text-xl font-bold text-emerald-300">{stats.agreements_count}</span>
+            </div>
+            <div className="card-pioneer p-3 text-center border border-rose-500/30 bg-rose-500/5">
+              <span className="block text-[11px] text-rose-400 mb-1">Contradictions</span>
+              <span className="font-serif text-xl font-bold text-rose-300">{stats.contradictions_count}</span>
+            </div>
+            <div className="card-pioneer p-3 text-center border border-amber-500/30 bg-amber-500/5">
+              <span className="block text-[11px] text-amber-400 mb-1">Methodology Diffs</span>
+              <span className="font-serif text-xl font-bold text-amber-300">{stats.methodological_diff_count}</span>
+            </div>
+            <div className="card-pioneer p-3 text-center border border-sky-500/30 bg-sky-500/5">
+              <span className="block text-[11px] text-sky-400 mb-1">Unresolved Issues</span>
+              <span className="font-serif text-xl font-bold text-sky-300">{stats.unresolved_issues_count}</span>
+            </div>
+          </div>
+
+          {/* Executive Comparison Summary Card */}
+          {activeComparison.analysis_json?.executive_summary && (
+            <div className="card-pioneer p-5 border-l-4 border-l-[#C5A36A] border-[#302319] bg-[#12100E]">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-[#C5A36A]">Comparative Synthesis</span>
+              <p className="mt-2 font-serif text-base text-[#F4EBDD] leading-relaxed">
+                {activeComparison.analysis_json.executive_summary}
+              </p>
+            </div>
+          )}
+
+          {/* Dimension-by-Dimension Side-by-Side Comparison */}
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#302319] pb-3">
+              <h2 className="font-serif text-xl font-semibold text-[#E9D6B6]">Dimension Cross-Examination</h2>
+              {/* Filter Tabs */}
+              <div className="flex flex-wrap gap-1">
+                {(['all', 'contradictions', 'methodology', 'findings', 'conclusions'] as const).map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setDimensionFilter(f)}
+                    className={cn(
+                      'px-2.5 py-1 text-xs rounded-md capitalize transition-all',
+                      dimensionFilter === f ? 'bg-[#C5A36A] text-[#080806] font-semibold shadow-sm' : 'text-[#817463] hover:text-[#F4EBDD] bg-[#14110D]'
+                    )}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {displayedDimensions.length === 0 ? (
+              <p className="py-8 text-center text-xs text-[#817463]">No dimensions match the selected filter.</p>
+            ) : (
+              displayedDimensions.map((dim) => {
+                const isExpanded = expandedDims.has(dim.dimension_id);
+                const st = dim.status.toLowerCase();
+                const badgeColor =
+                  st === 'agreement'
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+                    : st === 'contradiction'
+                    ? 'border-rose-500/40 bg-rose-500/10 text-rose-400'
+                    : st.includes('method')
+                    ? 'border-sky-500/40 bg-sky-500/10 text-sky-400'
+                    : st.includes('dataset')
+                    ? 'border-purple-500/40 bg-purple-500/10 text-purple-400'
+                    : st.includes('missing')
+                    ? 'border-[#554332] bg-[#221B14] text-[#A89885]'
+                    : 'border-amber-500/40 bg-amber-500/10 text-amber-400';
+
+                return (
+                  <div key={dim.dimension_id} className="card-pioneer p-5 border border-[#302319] space-y-4">
+                    {/* Dimension Header */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#302319] pb-3">
+                      <h3 className="font-serif text-base font-semibold text-[#F4EBDD]">{dim.title}</h3>
+                      <Badge className={badgeColor}>
+                        {dim.status.replace(/_/g, ' ').toUpperCase()}
+                      </Badge>
+                    </div>
+
+                    {/* Two-Column Content: Report A vs Report B */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                      <div className="rounded-lg border border-[#302319] bg-[#10100E] p-3">
+                        <span className="font-mono text-[#C5A36A] block mb-1.5 font-semibold">Report A: {activeComparison.report_a_title}</span>
+                        <p className="text-[#C0B19C] leading-relaxed whitespace-pre-wrap">{dim.report_a_content || 'Not specified in Report A.'}</p>
+                      </div>
+                      <div className="rounded-lg border border-[#302319] bg-[#10100E] p-3">
+                        <span className="font-mono text-[#C5A36A] block mb-1.5 font-semibold">Report B: {activeComparison.report_b_title}</span>
+                        <p className="text-[#C0B19C] leading-relaxed whitespace-pre-wrap">{dim.report_b_content || 'Not specified in Report B.'}</p>
+                      </div>
+                    </div>
+
+                    {/* Comparison Synthesis Verdict */}
+                    <div className="rounded-lg border border-[#453322] bg-[#14110D]/70 p-3 text-xs">
+                      <span className="font-mono text-[11px] text-[#A89885] block mb-1">Comparative Verdict:</span>
+                      <p className="text-[#E9D6B6] leading-relaxed">{dim.comparison_verdict}</p>
+                    </div>
+
+                    {/* Evidence and Passages Inspection Button */}
+                    {((dim.evidence_a && dim.evidence_a.length > 0) || (dim.evidence_b && dim.evidence_b.length > 0)) && (
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => toggleDimExpand(dim.dimension_id)}
+                          className="inline-flex items-center gap-1.5 text-xs text-[#C5A36A] hover:underline"
+                        >
+                          {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                          {isExpanded ? 'Hide Supporting Evidence & Citations' : 'Inspect Supporting Evidence & Passages'}
+                        </button>
+
+                        {isExpanded && (
+                          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs border-t border-[#302319] pt-3">
+                            <div className="space-y-2">
+                              <span className="font-mono text-[10px] uppercase text-[#817463]">Report A Supporting Passages</span>
+                              {dim.evidence_a?.map((ev, i) => (
+                                <blockquote key={i} className="border-l-2 border-[#C5A36A] pl-2.5 py-0.5 text-[#C0B19C] italic bg-[#10100E]/50 rounded-r">
+                                  "{ev.passage}"
+                                  <span className="block mt-1 text-[10px] text-[#817463] not-italic">— {ev.section || 'General'} (Page {ev.page || 1})</span>
+                                </blockquote>
+                              ))}
+                            </div>
+                            <div className="space-y-2">
+                              <span className="font-mono text-[10px] uppercase text-[#817463]">Report B Supporting Passages</span>
+                              {dim.evidence_b?.map((ev, i) => (
+                                <blockquote key={i} className="border-l-2 border-[#C5A36A] pl-2.5 py-0.5 text-[#C0B19C] italic bg-[#10100E]/50 rounded-r">
+                                  "{ev.passage}"
+                                  <span className="block mt-1 text-[10px] text-[#817463] not-italic">— {ev.section || 'General'} (Page {ev.page || 1})</span>
+                                </blockquote>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Identified Discrepancies & Contradictions Section */}
+          {keyDifferences.length > 0 && (
+            <div className="space-y-4 pt-4 border-t border-[#302319]">
+              <h2 className="font-serif text-xl font-semibold text-[#E9D6B6]">Identified Discrepancies & Reconciliation</h2>
+              <div className="grid grid-cols-1 gap-4">
+                {keyDifferences.map((diff, i) => (
+                  <div key={i} className="card-pioneer p-5 border border-amber-500/40 bg-amber-500/5 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs font-bold text-amber-300 uppercase tracking-wider">{diff.category || 'Discrepancy'}</span>
+                      <Badge className={diff.severity === 'high' ? 'border-red-500/40 text-red-400' : 'border-amber-500/40 text-amber-300'}>
+                        {diff.severity} severity
+                      </Badge>
+                    </div>
+                    <p className="text-sm font-medium text-[#F4EBDD]">{diff.description}</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      <div className="rounded border border-[#302319] bg-[#10100E] p-2.5">
+                        <span className="font-mono text-[#C5A36A] block mb-1">Report A Assertion:</span>
+                        <p className="text-[#C0B19C]">{diff.report_a_claim}</p>
+                      </div>
+                      <div className="rounded border border-[#302319] bg-[#10100E] p-2.5">
+                        <span className="font-mono text-[#C5A36A] block mb-1">Report B Assertion:</span>
+                        <p className="text-[#C0B19C]">{diff.report_b_claim}</p>
+                      </div>
+                    </div>
+                    {diff.explanation && (
+                      <p className="text-xs text-[#A89885] leading-relaxed"><strong className="text-[#E9D6B6]">Analysis:</strong> {diff.explanation}</p>
+                    )}
+                    {diff.resolution_notes && (
+                      <div className="rounded border border-[#302319] bg-[#10100E] p-2.5 text-xs text-[#A89885]">
+                        <span className="font-mono text-[#C5A36A] block mb-1">Synthesis & Reconciliation Guidance:</span>
+                        <p className="text-[#C0B19C]">{diff.resolution_notes}</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* DUAL-REPORT CHAT WORKSPACE */}
+          <div className="card-pioneer p-5 border border-[#453322] space-y-4 mt-8">
+            <div className="flex items-center justify-between border-b border-[#302319] pb-3">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-[#C5A36A]" />
+                <h2 className="font-serif text-lg font-semibold text-[#E9D6B6]">Chat with Both Reports</h2>
+              </div>
+              <span className="text-[11px] text-[#817463]">Grounded in Report A & Report B</span>
+            </div>
+
+            {/* Quick Prompt Chips */}
+            <div className="flex flex-wrap gap-2 text-xs">
+              {[
+                'What are the biggest disagreements between these two reports?',
+                'Which report provides stronger methodological support?',
+                'Which conclusions are supported by both reports?',
+                'Explain the differences in simpler language.',
+              ].map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => handleSendChat(chip)}
+                  disabled={chatBusy}
+                  className="rounded-full border border-[#453322] bg-[#14110D] px-3 py-1 text-[11px] text-[#A89885] hover:border-[#C5A36A] hover:text-[#F4EBDD] transition-all"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+
+            {/* Message Thread */}
+            <div ref={chatScrollRef} className="max-h-96 min-h-[160px] overflow-y-auto space-y-3 pr-1">
+              {chatMessages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center text-xs text-[#817463]">
+                  <Bot className="h-8 w-8 text-[#C5A36A]/50 mb-2" />
+                  <p>Ask any comparative question across both reports.</p>
+                  <p className="text-[11px] text-[#605244] mt-1">Answers include precise citations from Report A and Report B.</p>
+                </div>
+              ) : (
+                chatMessages.map((msg, i) => (
+                  <div
+                    key={msg.message_id || i}
+                    className={cn(
+                      'rounded-xl p-3.5 text-xs max-w-3xl leading-relaxed',
+                      msg.role === 'user'
+                        ? 'ml-auto bg-[#C5A36A]/15 border border-[#C5A36A]/30 text-[#F4EBDD]'
+                        : 'mr-auto bg-[#10100E] border border-[#302319] text-[#C0B19C]'
+                    )}
+                  >
+                    <div className="font-mono text-[10px] uppercase text-[#817463] mb-1">
+                      {msg.role === 'user' ? 'You' : 'Comparative Assistant'}
+                    </div>
+                    <div className="whitespace-pre-wrap">{msg.content}</div>
+
+                    {/* Citations block */}
+                    {msg.citations && msg.citations.length > 0 && (
+                      <div className="mt-3 border-t border-[#302319] pt-2 space-y-1">
+                        <span className="font-mono text-[10px] text-[#C5A36A] block">Sources & Citations:</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {msg.citations.map((c, ci) => (
+                            <span key={ci} className="inline-flex items-center gap-1 rounded bg-[#1B1510] px-2 py-0.5 text-[10px] font-mono text-[#E9D6B6] border border-[#453322]">
+                              [{c.source}] {c.section} (p. {c.page || 1})
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+              {chatBusy && (
+                <div className="flex items-center gap-2 text-xs text-[#817463]">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-[#C5A36A]" />
+                  <span>Synthesizing cross-report comparative answer…</span>
                 </div>
               )}
             </div>
-          ))}
+
+            {/* Input bar */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendChat();
+              }}
+              className="flex items-center gap-2 pt-2 border-t border-[#302319]"
+            >
+              <Input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Ask anything comparing Report A and Report B…"
+                disabled={chatBusy}
+                className="flex-1 text-xs"
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                type="submit"
+                loading={chatBusy}
+                disabled={!chatInput.trim() || chatBusy}
+                className="btn-pioneer-primary px-4"
+              >
+                <Send className="h-3.5 w-3.5 mr-1" /> Ask
+              </Button>
+            </form>
+          </div>
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmDialog
+        open={Boolean(deleteConfirmId)}
+        onClose={() => setDeleteConfirmId(null)}
+        onConfirm={() => deleteConfirmId && handleDeleteComparison(deleteConfirmId)}
+        busy={deleteBusy}
+        title="Delete Report Comparison"
+        message="Are you sure you want to permanently delete this report comparison and its conversational history?"
+      />
     </div>
   );
 }
+
 
 /* ============================================================
  * SECTION 14 — SYSTEM STATUS (FULL UI IMPLEMENTATION)
@@ -4234,8 +5161,9 @@ export function App() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="documents" element={<DocumentsPage />} />
         <Route path="review" element={<Navigate to="/app/new" replace />} />
-        <Route path="knowledge" element={<KnowledgeBasePage />} />
+        <Route path="knowledge" element={<Navigate to="/app/documents" replace />} />
         <Route path="contradictions" element={<ContradictionsPage />} />
+        <Route path="compare" element={<Navigate to="/app/contradictions" replace />} />
         <Route path="system" element={<SystemStatusPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>

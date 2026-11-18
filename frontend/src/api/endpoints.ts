@@ -74,6 +74,15 @@ export const API = {
   contradictions: {
     bySession: (id: string) => `/research/${id}/contradictions`,
   },
+  reportComparison: {
+    create: '/report-comparisons',
+    list: '/report-comparisons',
+    get: (id: string) => `/report-comparisons/${id}`,
+    chat: (id: string) => `/report-comparisons/${id}/chat`,
+    messages: (id: string) => `/report-comparisons/${id}/messages`,
+    delete: (id: string) => `/report-comparisons/${id}`,
+    export: (id: string) => `/report-comparisons/${id}/export`,
+  },
   reports: {
     bySession: (id: string) => `/research/${id}/reports`,
     get: (id: string) => `/reports/${id}`,

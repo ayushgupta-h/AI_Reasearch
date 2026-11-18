@@ -91,6 +91,7 @@ from app.services.chat_service import ChatService
 from app.services.contradiction_detection import ContradictionDetectionService
 from app.services.document_service import DocumentService
 from app.services.document_chat_service import DocumentChatService
+from app.services.report_comparison_service import ReportComparisonService
 from app.services.project_service import ProjectService
 from app.services.report_management_service import ReportManagementService
 from app.services.report_generation_service import ReportGenerationService
@@ -129,6 +130,7 @@ class ServiceContainer:
         self._document_chat: Optional[DocumentChatService] = None
         self._report_management: Optional[ReportManagementService] = None
         self._storage_service: Optional[StorageService] = None
+        self._report_comparison: Optional[ReportComparisonService] = None
         self._event_journal: Optional[EventJournal] = None
         self._event_reader: Optional[object] = None
         self._research_stream: Optional[ResearchStreamService] = None
@@ -249,6 +251,18 @@ class ServiceContainer:
                 chat_service=self.chat,
             )
         return self._document_chat
+
+    @property
+    def report_comparison(self) -> ReportComparisonService:
+        if self._report_comparison is None:
+            self._report_comparison = ReportComparisonService(
+                settings=self.settings,
+                chat_service=self.chat,
+                document_service=self.documents,
+                session_service=self.sessions,
+                report_service=self.reports,
+            )
+        return self._report_comparison
 
     @property
     def agent_history(self) -> AgentHistoryService:
@@ -578,6 +592,11 @@ def get_notification_service(request: Request) -> NotificationService:
 
 def get_memory_service(request: Request) -> ResearchMemoryService:
     return get_container(request).memory_service
+
+
+def get_report_comparison_service(request: Request) -> ReportComparisonService:
+    return get_container(request).report_comparison
+
 
 
 def get_contradiction_repository(
