@@ -9,7 +9,7 @@ Transforms a raw user topic into a structured, validated research plan:
   5. Presents the plan to the user for confirmation
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, ValidationError
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
@@ -52,12 +52,15 @@ class QueryValidation(BaseModel):
 class ResearchRequest(BaseModel):
     """Fully structured research request after LLM-powered analysis."""
     original_query: str = Field(
+        default="",
         description="The original user query, unchanged"
     )
     refined_query: str = Field(
+        default="",
         description="A clearer, more specific and searchable version of the query"
     )
     research_type: str = Field(
+        default="comprehensive_overview",
         description=(
             "One of: exploratory, comparative, fact_check, "
             "technical_deep_dive, trend_analysis, opinion_analysis"
@@ -67,23 +70,43 @@ class ResearchRequest(BaseModel):
         description="3-5 specific, targeted sub-queries for comprehensive search coverage"
     )
     focus_areas: list[str] = Field(
+        default_factory=list,
         description="Key angles, dimensions, or themes to investigate"
     )
     scope: str = Field(
+        default="comprehensive",
         description="One of: broad, focused, deep_dive"
     )
     time_sensitivity: str = Field(
+        default="medium",
         description=(
             "One of: high (needs the very latest data), "
             "medium (recent is preferred), low (evergreen / historical topic)"
         )
     )
     suggested_source_types: list[str] = Field(
+        default_factory=lambda: ["web", "academic", "news"],
         description=(
             "Most relevant source types from: academic, news, "
             "technical_docs, government, industry_reports, blogs"
         )
     )
+
+    @field_validator("sub_queries", "focus_areas", "suggested_source_types", mode="before")
+    @classmethod
+    def _coerce_list(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v]
+        return list(v)
+
+    @field_validator("refined_query", mode="before")
+    @classmethod
+    def _coerce_refined(cls, v, info):
+        if not v:
+            return (info.data or {}).get("original_query", "")
+        return str(v)
 
 
 # ─── Prompts ─────────────────────────────────────────────────────────────────
@@ -191,23 +214,27 @@ class QueryIntakeSystem:
 
     def decompose_query(self, query: str) -> ResearchRequest:
         """Decompose a research topic into a structured research plan."""
+        q_clean = (query or "").strip()
+        default_sub_queries = [
+            f"{q_clean} overview, background and core concepts",
+            f"{q_clean} market position, key metrics, and competitive landscape",
+            f"{q_clean} challenges, controversies and risks",
+            f"{q_clean} future developments, strategic outlook, and innovations",
+        ]
         try:
             result = self.decomposition_chain.invoke({"query": query})
             return ResearchRequest(**result)
+        except ValidationError:
+            raise
         except Exception as exc:
             logger.warning("Intake decomposition chain failed (%s); using heuristic decomposition", exc)
-            q_clean = (query or "").strip()
-            sub_queries = [
-                f"{q_clean} overview, background and core concepts",
-                f"{q_clean} market position, key metrics, and competitive landscape",
-                f"{q_clean} challenges, controversies and risks",
-                f"{q_clean} future developments, strategic outlook, and innovations",
-            ]
             return ResearchRequest(
                 original_query=q_clean,
+                refined_query=q_clean,
                 research_type="market_analysis" if any(w in q_clean.lower() for w in ["market", "company", "share", "business"]) else "comprehensive_overview",
                 scope="comprehensive",
-                sub_queries=sub_queries,
+                time_sensitivity="medium",
+                sub_queries=default_sub_queries,
                 suggested_source_types=["web", "academic", "news"],
                 focus_areas=["Core Fundamentals", "Market & Strategic Dynamics", "Future Outlook & Risks"],
             )
@@ -304,38 +331,41 @@ class QueryIntakeSystem:
         info_table.add_column("Value", style="white")
         info_table.add_row(
             "📋 Research Type",
-            request.research_type.replace("_", " ").title()
+            str(request.research_type or "comprehensive_overview").replace("_", " ").title()
         )
         info_table.add_row(
             "🎯 Scope",
-            request.scope.replace("_", " ").title()
+            str(request.scope or "comprehensive").replace("_", " ").title()
         )
         info_table.add_row(
             "⏱️  Time Sensitivity",
-            request.time_sensitivity.title()
+            str(request.time_sensitivity or "medium").title()
         )
         console.print(Panel(info_table, title="📊 Research Plan Overview", style="green"))
 
         # ── Refined query ────────────────────────────────────────
         console.print(Panel(
-            f"[bold white]{request.refined_query}[/bold white]",
+            f"[bold white]{request.refined_query or request.original_query}[/bold white]",
             title="🔎 Refined Query",
             style="blue"
         ))
 
         # ── Sub-queries ──────────────────────────────────────────
+        sub_queries = request.sub_queries or []
         sub_q_text = "\n".join(
             f"  [bold cyan]{i}.[/bold cyan] {sq}"
-            for i, sq in enumerate(request.sub_queries, 1)
+            for i, sq in enumerate(sub_queries, 1)
         )
-        console.print(Panel(sub_q_text, title="📝 Sub-Queries for Search", style="yellow"))
+        console.print(Panel(sub_q_text or "No sub-queries generated", title="📝 Sub-Queries for Search", style="yellow"))
 
         # ── Focus areas ──────────────────────────────────────────
-        focus_text = "\n".join(f"  • {fa}" for fa in request.focus_areas)
-        console.print(Panel(focus_text, title="🎯 Focus Areas", style="magenta"))
+        focus_areas = request.focus_areas or []
+        focus_text = "\n".join(f"  • {fa}" for fa in focus_areas)
+        console.print(Panel(focus_text or "General", title="🎯 Focus Areas", style="magenta"))
 
         # ── Suggested sources ────────────────────────────────────
+        sources = request.suggested_source_types or ["web", "academic", "news"]
         source_text = "  " + ", ".join(
-            s.replace("_", " ").title() for s in request.suggested_source_types
+            str(s).replace("_", " ").title() for s in sources
         )
         console.print(Panel(source_text, title="📚 Recommended Source Types", style="cyan"))

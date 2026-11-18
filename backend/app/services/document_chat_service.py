@@ -472,8 +472,9 @@ Provide a comprehensive comparative analysis with clear markdown tables and brac
             models_to_try: List[Optional[str]] = [None]
             if provider == "gemini":
                 models_to_try = [self._settings.gemini_model]
-                if "gemini-3.5-flash-lite" not in models_to_try:
-                    models_to_try.append("gemini-3.5-flash-lite")
+                for fallback_m in ("gemini-2.0-flash", "gemini-1.5-flash"):
+                    if fallback_m not in models_to_try:
+                        models_to_try.append(fallback_m)
 
             for model_cand in models_to_try:
                 for attempt in range(2):

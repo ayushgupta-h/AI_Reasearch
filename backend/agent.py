@@ -56,7 +56,7 @@ def _build_llm_for_provider(provider: str, temperature: float = 0):
     elif provider == "groq":
         from langchain_groq import ChatGroq
         return ChatGroq(
-            model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
+            model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             temperature=temperature,
             callbacks=cb,
         )
@@ -69,7 +69,7 @@ def _build_llm_for_provider(provider: str, temperature: float = 0):
         )
     else:
         return ChatGoogleGenerativeAI(
-            model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+            model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
             google_api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
             temperature=temperature,
             max_retries=3,

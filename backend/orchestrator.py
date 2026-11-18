@@ -307,7 +307,7 @@ class MultiAgentOrchestrator:
         @functools.wraps(fn)
         def wrapper(state: ResearchState) -> Dict[str, Any]:
             # ── Budget checks ───────────────────────────────────────────
-            meta = dict(state.get("execution_metadata", {}))
+            meta = dict(state.get("execution_metadata") or {})
             started_at = meta.get("started_at")
             if started_at is None:
                 started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -351,12 +351,12 @@ class MultiAgentOrchestrator:
                             datetime.timezone.utc
                         ).isoformat(),
                         "resume_token": str(uuid.uuid4()),
-                        "logs": state.get("logs", [])
+                        "logs": (state.get("logs") or [])
                         + [f"Paused before {name} awaiting human approval"],
                     }
 
             # ── Retry loop ─────────────────────────────────────────────
-            retry_counts = dict(state.get("node_retry_counts", {}))
+            retry_counts = dict(state.get("node_retry_counts") or {})
             attempt = retry_counts.get(name, 0)
             last_exc: Optional[Exception] = None
 
@@ -376,7 +376,7 @@ class MultiAgentOrchestrator:
                             datetime.timezone.utc
                         ).isoformat(),
                         "resume_token": str(uuid.uuid4()),
-                        "logs": state.get("logs", [])
+                        "logs": (state.get("logs") or [])
                         + [f"Interrupted before {name} for human approval"],
                     }
                 except Exception as exc:
@@ -411,18 +411,23 @@ class MultiAgentOrchestrator:
         is_fatal: bool = False
     ) -> Dict[str, Any]:
         """Append an error entry to state and return a failure-state update."""
-        errors = list(state.get("errors", []))
+        errors = list(state.get("errors") or [])
         errors.append({
             "node": node,
             "error": message,
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "fatal": is_fatal,
         })
+        # If refiner_node fails, ensure revision_count is incremented to prevent infinite looping
+        extra_updates: Dict[str, Any] = {}
+        if node == "refiner_node":
+            extra_updates["revision_count"] = (state.get("revision_count") or 0) + 1
         return {
             "errors": errors,
             "status": "failed" if is_fatal else state.get("status", "running"),
-            "logs": state.get("logs", [])
+            "logs": (state.get("logs") or [])
             + [f"Error in {node}: {message}"],
+            **extra_updates,
         }
 
     def _check_budgets(self, state: ResearchState) -> Optional[Dict[str, Any]]:
@@ -525,7 +530,26 @@ class MultiAgentOrchestrator:
             # Autonomous decomposition
             validation = intake.validate_query(state["topic"])
             intake._display_validation(validation)
-            request_obj = intake.decompose_query(state["topic"])
+            try:
+                request_obj = intake.decompose_query(state["topic"])
+            except Exception as exc:
+                logger.warning("Intake decomposition failed (%s); using heuristic plan", exc)
+                q_clean = (state.get("topic") or "").strip()
+                request_obj = ResearchRequest(
+                    original_query=q_clean,
+                    refined_query=q_clean,
+                    research_type="comprehensive_overview",
+                    scope="comprehensive",
+                    time_sensitivity="medium",
+                    sub_queries=[
+                        f"{q_clean} overview, background and core concepts",
+                        f"{q_clean} market position, key metrics, and competitive landscape",
+                        f"{q_clean} challenges, controversies and risks",
+                        f"{q_clean} future developments, strategic outlook, and innovations",
+                    ],
+                    suggested_source_types=["web", "academic", "news"],
+                    focus_areas=["Core Fundamentals", "Market & Strategic Dynamics", "Future Outlook & Risks"],
+                )
             intake._display_research_plan(request_obj)
 
         if not request_obj:
@@ -674,10 +698,10 @@ class MultiAgentOrchestrator:
 
     def reader_node(self, state: ResearchState) -> Dict[str, Any]:
         """Node 3: Reader Agent - Deeply scrapes authoritative URLs for detailed facts."""
-        top_urls = state.get("top_urls", [])
-        search_results = state.get("search_results", "")
-        req_data = state.get("research_request", {})
-        refined_query = req_data.get("refined_query", state["topic"])
+        top_urls = state.get("top_urls") or []
+        search_results = state.get("search_results") or ""
+        req_data = state.get("research_request") or {}
+        refined_query = req_data.get("refined_query") or state.get("topic", "")
 
         console.print(Panel(
             "[bold white]📖 AGENT 3: DEEP CONTENT READER & SCRAPER[/bold white]\n"
@@ -767,10 +791,10 @@ class MultiAgentOrchestrator:
 
     def rag_node(self, state: ResearchState) -> Dict[str, Any]:
         """Node 3.5: RAG Indexer — indexes all evidence into ChromaDB, retrieves semantic context."""
-        req_data = state.get("research_request", {})
-        refined_query = req_data.get("refined_query", state["topic"])
-        sub_queries = req_data.get("sub_queries", [refined_query])
-        focus_areas = req_data.get("focus_areas", [])
+        req_data = state.get("research_request") or {}
+        refined_query = req_data.get("refined_query") or state.get("topic", "")
+        sub_queries = req_data.get("sub_queries") or [refined_query]
+        focus_areas = req_data.get("focus_areas") or []
 
         console.print(Panel(
             "[bold white]🗃️  RAG KNOWLEDGE BASE[/bold white]\n"
@@ -824,10 +848,10 @@ class MultiAgentOrchestrator:
 
     def analyst_node(self, state: ResearchState) -> Dict[str, Any]:
         """Node 4: Analyst Agent - Cross-checks, synthesizes facts using RAG context + direct evidence."""
-        req_data = state.get("research_request", {})
-        refined_query = req_data.get("refined_query", state["topic"])
-        research_type = req_data.get("research_type", "exploratory")
-        focus_areas = ", ".join(req_data.get("focus_areas", ["General Overview"]))
+        req_data = state.get("research_request") or {}
+        refined_query = req_data.get("refined_query") or state.get("topic", "")
+        research_type = req_data.get("research_type") or "exploratory"
+        focus_areas = ", ".join(req_data.get("focus_areas") or ["General Overview"])
 
         console.print(Panel(
             "[bold white]🔬 AGENT 4: FACT SYNTHESIZER & ANALYST[/bold white]\n"
@@ -928,10 +952,10 @@ class MultiAgentOrchestrator:
         Falls back to the LLM writer_chain when report-generation inputs are
         unavailable, preserving existing behaviour.
         """
-        req_data = state.get("research_request", {})
-        refined_query = req_data.get("refined_query", state["topic"])
-        research_type = req_data.get("research_type", "comprehensive research")
-        focus_areas = ", ".join(req_data.get("focus_areas", ["Core Findings"]))
+        req_data = state.get("research_request") or {}
+        refined_query = req_data.get("refined_query") or state.get("topic", "")
+        research_type = req_data.get("research_type") or "comprehensive research"
+        focus_areas = ", ".join(req_data.get("focus_areas") or ["Core Findings"])
 
         console.print(Panel(
             "[bold white]✍️  AGENT 5: EVIDENCE-GROUNDED REPORT AUTHOR[/bold white]\n"
@@ -1060,9 +1084,9 @@ class MultiAgentOrchestrator:
         - Unsupported conclusions
         - Research question coverage
         """
-        req_data = state.get("research_request", {})
-        refined_query = req_data.get("refined_query", state["topic"])
-        focus_areas = ", ".join(req_data.get("focus_areas", ["General"]))
+        req_data = state.get("research_request") or {}
+        refined_query = req_data.get("refined_query") or state.get("topic", "")
+        focus_areas = ", ".join(req_data.get("focus_areas") or ["General"])
 
         console.print(Panel(
             "[bold white]🧐 AGENT 6: ACADEMIC CRITIC & AUDITOR[/bold white]\n"
@@ -1075,12 +1099,14 @@ class MultiAgentOrchestrator:
         # Only applies deductions when there is actual claim/evidence data to
         # evaluate. A minimal or empty report (e.g. in unit tests) is not
         # penalized for missing sections it was never asked to produce.
-        claims = state.get("claims", [])
+        claims = state.get("claims") or []
         verification_map = {
-            vr.get("claim_id"): vr for vr in state.get("claim_verification_results", [])
+            vr.get("claim_id"): vr
+            for vr in (state.get("claim_verification_results") or [])
+            if isinstance(vr, dict) and vr.get("claim_id")
         }
-        contradictions = state.get("contradictions", [])
-        citations = state.get("report_citations", [])
+        contradictions = state.get("contradictions") or []
+        citations = state.get("report_citations") or []
 
         audit_deductions = 0
         audit_issues: List[str] = []
@@ -1091,7 +1117,8 @@ class MultiAgentOrchestrator:
         # Check for contradicted claims presented as findings
         contradicted_presented = [
             c for c in claims
-            if verification_map.get(c.get("claim_id", ""), {}).get("status")
+            if isinstance(c, dict)
+            and (verification_map.get(c.get("claim_id", "")) or {}).get("status")
             == ClaimStatus.CONTRADICTED.value
         ]
         if contradicted_presented:
@@ -1244,10 +1271,10 @@ class MultiAgentOrchestrator:
 
     def refiner_node(self, state: ResearchState) -> Dict[str, Any]:
         """Node 7: Refiner Agent - Autonomous self-correction loop addressing critic feedback."""
-        revision_idx = state.get("revision_count", 0) + 1
-        req_data = state.get("research_request", {})
-        refined_query = req_data.get("refined_query", state["topic"])
-        eval_data = state.get("critic_evaluation", {})
+        revision_idx = (state.get("revision_count") or 0) + 1
+        req_data = state.get("research_request") or {}
+        refined_query = req_data.get("refined_query") or state.get("topic", "")
+        eval_data = state.get("critic_evaluation") or {}
 
         console.print(Panel(
             f"[bold white]🔄 AGENT 7: SELF-CORRECTION & REFINEMENT AGENT (Cycle {revision_idx}/{state.get('max_revisions', 2)})[/bold white]\n"
@@ -1256,24 +1283,26 @@ class MultiAgentOrchestrator:
             style="bold yellow"
         ))
 
-        strengths_str = "\n".join(f"- {s}" for s in eval_data.get("strengths", []))
-        improvements_str = "\n".join(f"- {i}" for i in eval_data.get("areas_for_improvement", []))
-        revisions_str = "\n".join(f"- {r}" for r in eval_data.get("actionable_revisions", []))
+        strengths_str = "\n".join(f"- {s}" for s in (eval_data.get("strengths") or []))
+        improvements_str = "\n".join(f"- {i}" for i in (eval_data.get("areas_for_improvement") or []))
+        revisions_str = "\n".join(f"- {r}" for r in (eval_data.get("actionable_revisions") or []))
 
         # Evidence context for the refiner: contradictions, unverified claims, citation gaps
         verification_map = {
-            vr.get("claim_id"): vr for vr in state.get("claim_verification_results", [])
+            vr.get("claim_id"): vr
+            for vr in (state.get("claim_verification_results") or [])
+            if isinstance(vr, dict) and vr.get("claim_id")
         }
         unverified_claims = [
-            c.get("text", c.get("claim_text", ""))
-            for c in state.get("claims", [])
-            if verification_map.get(c.get("claim_id", ""), {}).get("status")
+            (c.get("text") or c.get("claim_text") or "")
+            for c in (state.get("claims") or [])
+            if isinstance(c, dict) and (verification_map.get(c.get("claim_id", "")) or {}).get("status")
             in (ClaimStatus.INSUFFICIENT_CONTEXT.value, ClaimStatus.UNVERIFIED.value)
         ]
         contradicted_claims = [
-            c.get("text", c.get("claim_text", ""))
-            for c in state.get("claims", [])
-            if verification_map.get(c.get("claim_id", ""), {}).get("status")
+            (c.get("text") or c.get("claim_text") or "")
+            for c in (state.get("claims") or [])
+            if isinstance(c, dict) and (verification_map.get(c.get("claim_id", "")) or {}).get("status")
             == ClaimStatus.CONTRADICTED.value
         ]
         evidence_context = (

@@ -18,6 +18,8 @@ services:
         value: production
       - key: PERSISTENT_DATA_DIR
         value: /var/data
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
       - key: DATABASE_URL
         sync: false
       - key: SUPABASE_URL

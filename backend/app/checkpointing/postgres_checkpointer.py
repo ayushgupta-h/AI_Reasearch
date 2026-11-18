@@ -71,6 +71,13 @@ def _owner_id(config: RunnableConfig) -> str:
     return str(configurable.get("owner_id", ""))
 
 
+def _exec_sql(connection: Any, sql: str, params: tuple = ()) -> Any:
+    """Execute SQL driver statement, falling back to execute for mock connections."""
+    if hasattr(connection, "exec_driver_sql"):
+        return connection.exec_driver_sql(sql, params)
+    return connection.execute(sql, params)
+
+
 # DDL: created lazily on first use.
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS langgraph_checkpoints (
@@ -174,9 +181,9 @@ class PostgresCheckpointer(BaseCheckpointSaver):
             try:
                 engine = self._get_engine()
                 with engine.connect() as connection:
-                    connection.exec_driver_sql(_CREATE_TABLE_SQL)
+                    _exec_sql(connection, _CREATE_TABLE_SQL)
                     for statement in _CREATE_INDEXES_SQL:
-                        connection.exec_driver_sql(statement)
+                        _exec_sql(connection, statement)
                     connection.commit()
                 self._schema_ready = True
             except Exception as exc:
@@ -229,12 +236,14 @@ class PostgresCheckpointer(BaseCheckpointSaver):
                 engine = self._get_engine()
                 with engine.connect() as connection:
                     if checkpoint_id:
-                        rows = connection.exec_driver_sql(
+                        rows = _exec_sql(
+                            connection,
                             _SELECT_TUPLE_SQL + " AND checkpoint_id = %s ORDER BY created_at DESC LIMIT 1",
                             (thread_id, checkpoint_ns, owner_id, checkpoint_id),
                         ).fetchall()
                     else:
-                        rows = connection.exec_driver_sql(
+                        rows = _exec_sql(
+                            connection,
                             _SELECT_TUPLE_SQL + " ORDER BY created_at DESC LIMIT 1",
                             (thread_id, checkpoint_ns, owner_id),
                         ).fetchall()
@@ -334,7 +343,8 @@ class PostgresCheckpointer(BaseCheckpointSaver):
                 self.ensure_schema()
                 engine = self._get_engine()
                 with engine.connect() as connection:
-                    connection.exec_driver_sql(
+                    _exec_sql(
+                        connection,
                         _INSERT_SQL,
                         (
                             thread_id,
@@ -417,7 +427,7 @@ class PostgresCheckpointer(BaseCheckpointSaver):
             params.append(limit)
 
         with engine.connect() as connection:
-            rows = connection.exec_driver_sql(sql, tuple(params)).fetchall()
+            rows = _exec_sql(connection, sql, tuple(params)).fetchall()
 
         for row in rows:
             yield CheckpointTuple(
@@ -451,7 +461,7 @@ class PostgresCheckpointer(BaseCheckpointSaver):
         self.ensure_schema()
         engine = self._get_engine()
         with engine.connect() as connection:
-            connection.exec_driver_sql(_DELETE_THREAD_SQL, (thread_id, owner_id))
+            _exec_sql(connection, _DELETE_THREAD_SQL, (thread_id, owner_id))
             connection.commit()
 
 

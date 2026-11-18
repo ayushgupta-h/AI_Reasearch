@@ -219,8 +219,8 @@ class Settings:
     gemini_api_key: str = field(default="", repr=False)
     mistral_api_key: str = field(default="", repr=False)
     hf_token: str = field(default="", repr=False)
-    groq_model: str = "openai/gpt-oss-120b"
-    gemini_model: str = "gemini-3.5-flash-lite"
+    groq_model: str = "llama-3.3-70b-versatile"
+    gemini_model: str = "gemini-2.0-flash"
     mistral_model: str = "mistral-small-latest"
     hf_model: str = "mistral"
 
@@ -363,8 +363,8 @@ class Settings:
             gemini_api_key=_get(source, "GEMINI_API_KEY", "GOOGLE_API_KEY"),
             mistral_api_key=_get(source, "MISTRAL_API_KEY"),
             hf_token=_get(source, "HF_TOKEN", "HUGGINGFACEHUB_API_TOKEN"),
-            groq_model=_get(source, "GROQ_MODEL", default="openai/gpt-oss-120b"),
-            gemini_model=_get(source, "GEMINI_MODEL", default="gemini-3.5-flash-lite"),
+            groq_model=_get(source, "GROQ_MODEL", default="llama-3.3-70b-versatile"),
+            gemini_model=_get(source, "GEMINI_MODEL", default="gemini-2.0-flash"),
             mistral_model=_get(source, "MISTRAL_MODEL", default="mistral-small-latest"),
             hf_model=_get(source, "HF_MODEL", default="mistral"),
             gateway_enabled=gateway_enabled,

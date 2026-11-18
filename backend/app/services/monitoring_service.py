@@ -403,7 +403,7 @@ class MonitoringService:
             "gemini": {
                 "name": "Google Gemini",
                 "default_model": self._settings.gemini_model,
-                "supported": ["gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
+                "supported": ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
             },
             "groq": {
                 "name": "Groq Cloud LPU",

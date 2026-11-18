@@ -70,6 +70,7 @@ _PROVIDER_ERROR_MARKERS = (
     "502", "503", "504", "overloaded", "temporarily unavailable",
     "max retries exceeded",
     "bad request", "invalid_request_error", "model_not_supported",
+    "forbidden", "not allowed", "permissiondenied", "not iterable", "nonetype",
 )
 
 
@@ -220,9 +221,9 @@ class ResearchService:
                         "research.provider_failed",
                         extra={"agent": provider, "error_code": "llm_provider_failed"},
                     )
-                    if not is_provider_error(exc) or attempt == len(chain) - 1:
-                        break
-                    continue
+                    if attempt < len(chain) - 1:
+                        continue
+                    break
 
         if final_state is None:
             raise LLMProviderError(
