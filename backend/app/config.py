@@ -59,17 +59,6 @@ APP_VERSION = "1.0.0"
 PROVIDER_ORDER: tuple[str, ...] = ("gemini", "groq", "mistral", "huggingface")
 VALID_ENVIRONMENTS = ("development", "staging", "production", "test")
 
-# ── Path constants ───────────────────────────────────────────────────────────
-
-BASE_DIR: Path = Path(__file__).resolve().parent.parent      # backend/
-PROJECT_ROOT: Path = BASE_DIR.parent                         # repository root
-REPORTS_DIR: Path = BASE_DIR / "reports"
-EXPORTS_DIR: Path = REPORTS_DIR / "exports"
-CHROMA_DIR: Path = BASE_DIR / "chroma_db"
-SESSIONS_DB: Path = BASE_DIR / "sessions.db"
-CHROMA_KEY_FILE: Path = BASE_DIR / "chroma.key"
-
-
 # ── .env bootstrap (exactly once per process) ───────────────────────────────
 
 
@@ -88,7 +77,39 @@ def load_env() -> None:
     load_dotenv(override=False)
 
 
+BASE_DIR: Path = Path(__file__).resolve().parent.parent      # backend/
+PROJECT_ROOT: Path = BASE_DIR.parent                         # repository root
 load_env()
+
+
+def resolve_data_root() -> Path:
+    """Resolve the root directory for persistent state.
+    
+    Checks in priority order:
+    1. PERSISTENT_DATA_DIR environment variable (Render persistent disk or custom mount)
+    2. /var/data directory (standard Render persistent disk mount point)
+    3. BASE_DIR (local backend directory fallback for development)
+    """
+    env_dir = os.environ.get("PERSISTENT_DATA_DIR", "").strip()
+    if env_dir:
+        p = Path(env_dir).expanduser()
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception:
+            pass
+    var_data = Path("/var/data")
+    if var_data.exists() and var_data.is_dir():
+        return var_data
+    return BASE_DIR
+
+
+DATA_ROOT: Path = resolve_data_root()
+REPORTS_DIR: Path = DATA_ROOT / "reports"
+EXPORTS_DIR: Path = REPORTS_DIR / "exports"
+CHROMA_DIR: Path = DATA_ROOT / "chroma_db"
+SESSIONS_DB: Path = DATA_ROOT / "sessions.db"
+CHROMA_KEY_FILE: Path = DATA_ROOT / "chroma.key"
 
 
 # ── Typed env helpers ────────────────────────────────────────────────────────
@@ -530,7 +551,7 @@ class Settings:
         return warnings + fatal
 
     def ensure_directories(self) -> None:
-        for path in (self.reports_dir, self.exports_dir, self.chroma_dir):
+        for path in (self.reports_dir, self.exports_dir, self.chroma_dir, self.sessions_db_path.parent):
             path.mkdir(parents=True, exist_ok=True)
 
 

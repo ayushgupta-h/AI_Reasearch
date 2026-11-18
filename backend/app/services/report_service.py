@@ -90,6 +90,12 @@ class ReportService:
         if candidate == base or base not in candidate.parents:
             raise AuthorizationError("Access denied: invalid report path.")
         if not candidate.is_file():
+            try:
+                from app.infrastructure.postgres_bridge import rehydrate_report_from_postgres
+                rehydrate_report_from_postgres(candidate.name, candidate)
+            except Exception:
+                pass
+        if not candidate.is_file():
             raise NotFoundError("Report file not found.")
         return candidate
 

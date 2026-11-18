@@ -68,6 +68,22 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             ",".join(settings.configured_providers()) or "none",
         )
         try:
+            from app.database.session import check_connection
+            from app.infrastructure.postgres_bridge import init_postgres_schema, sync_sqlite_to_postgres
+            if check_connection(settings):
+                init_postgres_schema()
+                with container.sessions.manager._connect() as s_conn:
+                    sync_sqlite_to_postgres(s_conn)
+                logger.info("postgres.persistence_ready host_configured=True")
+            else:
+                if settings.app_env == "production":
+                    logger.error("postgres.connection_failed - verify DATABASE_URL in environment settings!")
+                else:
+                    logger.warning("postgres.unavailable - using local storage fallback")
+        except Exception as exc:
+            logger.warning("postgres.startup_sync_warning %s", exc)
+
+        try:
             yield
         finally:
             # Join local job threads and release adapter resources.

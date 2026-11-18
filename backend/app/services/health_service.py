@@ -155,12 +155,15 @@ class HealthService:
             self._check_chroma(),
             self._check_storage(),
         ]
+        valid_checks = [c for c in checks if c is not None]
         self._refresh_provider_probes()
         for provider in self._settings.configured_providers():
-            checks.append(self._check_provider(provider))
+            p_check = self._check_provider(provider)
+            if p_check is not None:
+                valid_checks.append(p_check)
         return DependenciesResponse(
-            status=self._derive(checks, core={"process", "database", "storage"}),
-            checks=checks,
+            status=self._derive(valid_checks, core={"process", "database", "storage"}),
+            checks=valid_checks,
             providers=self.provider_statuses(probe=True),
         )
 
