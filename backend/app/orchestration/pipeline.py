@@ -76,15 +76,18 @@ def build_orchestrator(
 
 
 def build_checkpointer(settings: Optional[Settings] = None) -> Optional[PostgresCheckpointer]:
-    """Build a PostgreSQL checkpointer when DATABASE_URL is configured.
+    """Build a PostgreSQL checkpointer when DATABASE_URL is configured and reachable.
 
-    Returns ``None`` when no database URL is available, so the orchestrator
-    falls back to in-memory execution without checkpointing.
+    Returns ``None`` when no database URL is available or if PostgreSQL is unreachable,
+    so the orchestrator falls back to in-memory execution without checkpointing.
     """
     cfg = settings or get_settings()
     if not cfg.database_url:
         return None
     try:
+        from app.database.session import check_connection
+        if not check_connection(cfg):
+            return None
         engine = get_engine(cfg)
         return PostgresCheckpointer(engine=engine)
     except Exception:  # never fail startup because checkpointing is optional

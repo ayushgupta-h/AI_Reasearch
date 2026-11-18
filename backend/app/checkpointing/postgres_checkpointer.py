@@ -41,6 +41,9 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.config import Settings, get_settings
 from app.database.session import get_engine
+from app.observability import get_logger
+
+logger = get_logger("app.checkpointing.postgres")
 
 
 def _utcnow_iso() -> str:
@@ -149,6 +152,8 @@ class PostgresCheckpointer(BaseCheckpointSaver):
         self._engine = engine
         self._schema_ready = False
         self._schema_lock = threading.Lock()
+        self._pg_disabled = False
+        self._memory_store: dict[tuple[str, str, str], CheckpointTuple] = {}
 
     # ── Engine ──────────────────────────────────────────────────────────
 
@@ -161,18 +166,22 @@ class PostgresCheckpointer(BaseCheckpointSaver):
 
     def ensure_schema(self) -> None:
         """Create the checkpoints table and indexes (idempotent)."""
-        if self._schema_ready:
+        if self._schema_ready or self._pg_disabled:
             return
         with self._schema_lock:
-            if self._schema_ready:
+            if self._schema_ready or self._pg_disabled:
                 return
-            engine = self._get_engine()
-            with engine.connect() as connection:
-                connection.exec_driver_sql(_CREATE_TABLE_SQL)
-                for statement in _CREATE_INDEXES_SQL:
-                    connection.exec_driver_sql(statement)
-                connection.commit()
-            self._schema_ready = True
+            try:
+                engine = self._get_engine()
+                with engine.connect() as connection:
+                    connection.exec_driver_sql(_CREATE_TABLE_SQL)
+                    for statement in _CREATE_INDEXES_SQL:
+                        connection.exec_driver_sql(statement)
+                    connection.commit()
+                self._schema_ready = True
+            except Exception as exc:
+                logger.warning("postgres_checkpointer.schema_failed_fallback_to_memory: %s", exc)
+                self._pg_disabled = True
 
     # ── Serialisation helpers ───────────────────────────────────────────
 
@@ -205,47 +214,64 @@ class PostgresCheckpointer(BaseCheckpointSaver):
         if not thread_id or not owner_id:
             return None
 
+        # Check in-memory store first if PostgreSQL is disabled or as fallback
+        mem_key = (thread_id, checkpoint_ns, checkpoint_id or "")
+        if self._pg_disabled:
+            if checkpoint_id and mem_key in self._memory_store:
+                return self._memory_store[mem_key]
+            # Find latest matching in memory
+            matches = [v for k, v in self._memory_store.items() if k[0] == thread_id and k[1] == checkpoint_ns]
+            return matches[-1] if matches else None
+
         self.ensure_schema()
-        engine = self._get_engine()
-        with engine.connect() as connection:
-            if checkpoint_id:
-                rows = connection.exec_driver_sql(
-                    _SELECT_TUPLE_SQL + " AND checkpoint_id = %s ORDER BY created_at DESC LIMIT 1",
-                    (thread_id, checkpoint_ns, owner_id, checkpoint_id),
-                ).fetchall()
-            else:
-                rows = connection.exec_driver_sql(
-                    _SELECT_TUPLE_SQL + " ORDER BY created_at DESC LIMIT 1",
-                    (thread_id, checkpoint_ns, owner_id),
-                ).fetchall()
+        if not self._pg_disabled:
+            try:
+                engine = self._get_engine()
+                with engine.connect() as connection:
+                    if checkpoint_id:
+                        rows = connection.exec_driver_sql(
+                            _SELECT_TUPLE_SQL + " AND checkpoint_id = %s ORDER BY created_at DESC LIMIT 1",
+                            (thread_id, checkpoint_ns, owner_id, checkpoint_id),
+                        ).fetchall()
+                    else:
+                        rows = connection.exec_driver_sql(
+                            _SELECT_TUPLE_SQL + " ORDER BY created_at DESC LIMIT 1",
+                            (thread_id, checkpoint_ns, owner_id),
+                        ).fetchall()
 
-        if not rows:
-            return None
+                if rows:
+                    row = rows[0]
+                    return CheckpointTuple(
+                        config={
+                            "configurable": {
+                                "thread_id": row[0],
+                                "checkpoint_ns": row[1],
+                                "checkpoint_id": row[2],
+                            }
+                        },
+                        checkpoint=self._deserialise_checkpoint(row[5]),
+                        metadata=self._deserialise_metadata(row[6]),
+                        parent_config=(
+                            {
+                                "configurable": {
+                                    "thread_id": row[0],
+                                    "checkpoint_ns": row[1],
+                                    "checkpoint_id": row[3],
+                                }
+                            }
+                            if row[3]
+                            else None
+                        ),
+                        pending_writes=None,
+                    )
+            except Exception as exc:
+                logger.warning("postgres_checkpointer.get_tuple_failed_using_memory: %s", exc)
+                self._pg_disabled = True
 
-        row = rows[0]
-        return CheckpointTuple(
-            config={
-                "configurable": {
-                    "thread_id": row[0],
-                    "checkpoint_ns": row[1],
-                    "checkpoint_id": row[2],
-                }
-            },
-            checkpoint=self._deserialise_checkpoint(row[5]),
-            metadata=self._deserialise_metadata(row[6]),
-            parent_config=(
-                {
-                    "configurable": {
-                        "thread_id": row[0],
-                        "checkpoint_ns": row[1],
-                        "checkpoint_id": row[3],
-                    }
-                }
-                if row[3]
-                else None
-            ),
-            pending_writes=None,
-        )
+        if checkpoint_id and mem_key in self._memory_store:
+            return self._memory_store[mem_key]
+        matches = [v for k, v in self._memory_store.items() if k[0] == thread_id and k[1] == checkpoint_ns]
+        return matches[-1] if matches else None
 
     def put(
         self,
@@ -269,30 +295,63 @@ class PostgresCheckpointer(BaseCheckpointSaver):
                 "config['configurable']"
             )
 
-        self.ensure_schema()
-        engine = self._get_engine()
         parent_id = None
         existing = self.get_tuple(config)
         if existing is not None and existing.parent_config:
             parent_cfg = existing.parent_config.get("configurable", {})
             parent_id = parent_cfg.get("checkpoint_id")
 
-        with engine.connect() as connection:
-            connection.exec_driver_sql(
-                _INSERT_SQL,
-                (
-                    thread_id,
-                    checkpoint_ns,
-                    checkpoint_id,
-                    parent_id,
-                    type(checkpoint).__name__,
-                    self._serialise_checkpoint(checkpoint),
-                    self._serialise_metadata(metadata),
-                    owner_id,
-                    _utcnow_iso(),
-                ),
-            )
-            connection.commit()
+        # Always save to in-memory fallback store
+        saved_tuple = CheckpointTuple(
+            config={
+                "configurable": {
+                    "thread_id": thread_id,
+                    "checkpoint_ns": checkpoint_ns,
+                    "checkpoint_id": checkpoint_id,
+                }
+            },
+            checkpoint=checkpoint,
+            metadata=metadata,
+            parent_config=(
+                {
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "checkpoint_ns": checkpoint_ns,
+                        "checkpoint_id": parent_id,
+                    }
+                }
+                if parent_id
+                else None
+            ),
+            pending_writes=None,
+        )
+        self._memory_store[(thread_id, checkpoint_ns, checkpoint_id)] = saved_tuple
+        self._memory_store[(thread_id, checkpoint_ns, "")] = saved_tuple
+
+        # Best-effort persistence to PostgreSQL
+        if not self._pg_disabled:
+            try:
+                self.ensure_schema()
+                engine = self._get_engine()
+                with engine.connect() as connection:
+                    connection.exec_driver_sql(
+                        _INSERT_SQL,
+                        (
+                            thread_id,
+                            checkpoint_ns,
+                            checkpoint_id,
+                            parent_id,
+                            type(checkpoint).__name__,
+                            self._serialise_checkpoint(checkpoint),
+                            self._serialise_metadata(metadata),
+                            owner_id,
+                            _utcnow_iso(),
+                        ),
+                    )
+                    connection.commit()
+            except Exception as exc:
+                logger.warning("postgres_checkpointer.put_failed_using_memory: %s", exc)
+                self._pg_disabled = True
 
         return {
             "configurable": {
